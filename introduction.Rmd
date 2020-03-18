@@ -25,15 +25,26 @@ library(RStoolbox)
 ```
 
 ```{r}
-#system(paste("ln -s D:/Documents/gtj_local/Données/QGIS/Thèse LiDAR Glad/bjorn/", system.file("extdata", package = "GTJ")))
-datapath <- file.path("D:/Documents/gtj_local/Données/QGIS/Thèse LiDAR Glad/bjorn/")
-#list.files(file.path(datapath, "Env_var/sites"))
+system(paste("ln -s /Volumes/ExtremeSSD/GTJ/DATA", system.file("extdata", package = "GTJ")))
+datapath <- file.path(system.file("extdata", package = "GTJ"), "DATA")
+# list.files(file.path(datapath, "Env_var/sites"))
 ```
 # Hazel grouse data - observation distance
 ```{r}
 #Distance data and logspline GDT
 species_path <- file.path(datapath, "Species/HZ")
 OBSGDTshp <- st_read(file.path(species_path, "OBSGELtot2016.shp"))
+
+species_path <- file.path(datapath, "Species/CAP")
+OBSGDTshp <- st_read(file.path(species_path, "OBSGDTtot2018.shp"))
+# table(OBSGDTshp$distance)
+#dd <- as.numeric(as.character(OBSGDTshp$distance))
+# hist(dd)
+#table(as.character(dd))
+#class(OBSGDTshp$distance)
+
+OBSGDTshp$distance <- as.numeric(as.character(OBSGDTshp$distance)) # as.numeric(OBSGDTshp$distance)# st_read(file.path(species_path, "OBSGDTtot2018.shp"))
+
 
 Tracks_distance <- subset(OBSGDTshp, !OBSGDTshp$PROSPID=="NA" & OBSGDTshp$PROSPSA=="Hivernales" & OBSGDTshp$distance < 100)
 
@@ -106,8 +117,8 @@ plot(st_geometry(limits_HZ), add = TRUE, border = "red")
 
 
 ```{r}
-target_path_15_8ha_Mean <- file.path(datapath, "Env_var/MW15_8ha/Mean", "/")
-target_path_15_8ha_sd <- file.path(datapath, "Env_var/MW15_8ha/sd/", "/")
+target_path_15_8ha_Mean <- file.path(datapath, "Env_var/MW15_8ha/Mean/")
+target_path_15_8ha_sd <- file.path(datapath, "Env_var/MW15_8ha/sd/")
 new_env_raster <- raster::stack(
   paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_H.nb2_5relative_density.tif"),
   paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_H.nb10_20relative_density.tif"),
@@ -154,7 +165,7 @@ new_env_raster <- subset(new_env_raster, predictors)
 ```
 
 ```{r}
-plot(new_env_raster)
+# plot(new_env_raster)
 ```
 
 ```{r}
@@ -203,103 +214,6 @@ pres_pointsGDT <- data.frame(st_coordinates(OBSGDTshp), Pres = 1)
 #### Generate random points winter random point
 set.seed(154)
 TracksSP <- as(Tracks, Class = "Spatial")
-
-randomspace <- function(xy, start=0, n){
-  
-  
-  dx <- c(0,diff(xy[,1])) #compute sucessive differences
-  dy <- c(0,diff(xy[,2])) #compute sucessive differences
-  dseg <- sqrt(dx^2+dy^2) #calculate lenght of each segment
-  dtotal <- cumsum(dseg)  #distance total cumulated
-  
-  linelength = sum(dseg) #distance totale
-  
-  
-  pos <- runif(n, 0, linelength) # select random position on the segment by distance from x0y0 coordinates
-  
-  whichseg = unlist(lapply(pos, function(x){sum(dtotal<=x)})) #create a vector to assign which point belong to which segment
-  
-  #create a dataframe with point location by distance, segment number, x0,y0,x1,y1 segment coordinates, lenght of the segment and cumulative lenght to x0y0
-  pos=data.frame(pos=pos,whichseg=whichseg,
-                 x0=xy[whichseg,1],
-                 y0=xy[whichseg,2],
-                 dseg = dseg[whichseg+1],
-                 dtotal = dtotal[whichseg],
-                 x1=xy[whichseg+1,1],
-                 y1=xy[whichseg+1,2]
-  )
-  
-  pos$further =  pos$pos - pos$dtotal #give distance fomr x0y0 to the point
-  pos$f = pos$further/pos$dseg
-  pos$x = pos$x0 + pos$f * (pos$x1-pos$x0) #coordinate x of the point
-  pos$y = pos$y0 + pos$f * (pos$y1-pos$y0) #coordinate y of the point
-  
-  pos$theta = atan2(pos$y0-pos$y1,pos$x0-pos$x1)# add theta angle
-  
-  
-  return(pos[,c("x","y","x0","y0","x1","y1","theta")]) #return a dataframe with coordinates and theta to be use by transect function
-  
-}
-
-transect <- function( tpts, tlen, n){
-  
-  tpts$thetaT = tpts$theta+pi/2
-  dx = tlen*cos(tpts$thetaT) #distance x
-  dy = tlen*sin(tpts$thetaT) #distance y
-  
-  SIGN<-sign(runif(n,-1,1)) #random sign to choose a random side of the segment
-  return(
-    
-    data.frame(x0 = tpts$x + SIGN*dx,
-               y0 =tpts$y + SIGN*dy
-               )
-  
-  )
-  
-}
-
-RANDOM_POINTS<- function (x, n, type, logplineobj, offset = runif(1), ...) 
-{
-  if (isTRUE(!is.projected(x))) 
-    warning("working under the assumption of projected data!")
-  lengths = SpatialLinesLengths(x, longlat = FALSE) # lenght of each spatialline object (<=> one track)
-  if (sum(lengths) < .Machine$double.eps) 
-    stop("SpatialLines object of no length")
-  
-  nrs=rmultinom(1, n, lengths) # l'argument prob de la fonction rmultinom est automatiquement normalisé à 1
-
-  
-  if (sum(nrs) == 0) 
-    warning("n too small, increase n and sample from output")
-  ret = vector("list", sum(nrs > 0))
-  ret2 = vector("list", sum(nrs > 0))
-  ret3 = vector("list", sum(nrs > 0))
-  ret4 = vector("list", sum(nrs > 0))
-  ret5 = vector("list", sum(nrs > 0))
-  j = 1
-  for (i in 1:length(lengths)) {
-    if (nrs[i] > 0) {
-      z<-coordinates(x@lines[[i]]) #get coordinates for the line number i
-      zz<-z[[1]]
-      distance=(randomdist<-rlogspline(nrs[[i]] , logplineobj)) #calculate random distance following logspline distribution
-      
-      ret[[j]]=randomspace(zz, start=0, nrs[i]) #create random space point for each segment with the number of point nrs needed calculated with rmultinom
-      ret2[[j]]<-transect(ret[[j]], tlen = distance, n=nrs[[i]]) #obtain coordinate of the point by using the transect function and the random distances
-      ID<-x@data$PROSPID[i]
-      date<-x@data$Date_prosp[i]
-      ret3[[j]]<-cbind(ret2[[j]], ID)
-      ret4[[j]]<-cbind(ret3[[j]], date)
-      ret5[[j]]<-cbind(ret4[[j]], distance)
-      j = j + 1
-    }
-  }
-
- 
- ret5 = do.call(rbind, ret5)#return all coordinates
- 
-
-}
-
 backgroundGDT <- RANDOM_POINTS(TracksSP, n=10000, logplineobj = fitlogspline1, type="random")
 
 backgroundGDT <- data.frame(X=backgroundGDT$x0, Y=backgroundGDT$y0, Pres=0)
