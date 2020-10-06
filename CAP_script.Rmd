@@ -1,0 +1,1107 @@
+---
+title: "CAP_script"
+author: "Vincent Gardet"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    code_folding: show
+    number_sections: yes
+    toc: yes
+vignette: |
+  %\VignetteIndexEntry{introduction} %\VignetteEngine{knitr::rmarkdown} %\VignetteEncoding{UTF-8}
+---
+# INITIALISATION
+## R setup
+```{r, include=FALSE}
+rm(list = ls()) #Cleans the environment
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  warning = FALSE, 
+  cache = TRUE
+)
+```
+
+
+## Library setup
+```{r setup, include=FALSE}
+#library(doSNOW)
+library(filesstrings)
+#library(foreach) 
+library(fs)
+library(ggplot2)
+library(GTJ)
+library(plainview)
+library(leaflet)
+library(logspline)
+library(maxnet)
+library(parallel)
+library(raster)
+#library(rgdal)
+#library(rgeos)
+library(RColorBrewer)
+library(RStoolbox)
+library(sf)
+library(sp)
+library(spatstat)
+```
+
+
+## Files hierachy setup
+```{r, include=FALSE}
+setwd("D:/Documents/gtj_local/data/") #Chunk working directory
+
+#Path setup
+anoukdatapath <- file.path("D:/Documents/gtj_local/data/anouk_data/")
+lidarpath <- file.path("D:/Documents/gtj_local/data/lidar_data/full/DATA/")
+speciespath <- file.path(lidarpath, "Species/CAP/")
+owndatapath <- file.path("D:/Documents/gtj_local/data/own_data/")
+rawdatapath <- file.path("D:/Documents/gtj_local/data/raw_data/")
+scriptpath <- file.path("D:/Documents/gtj_local/r/inrae_git/vignettes/")
+outputpath <- file.path("D:/Documents/gtj_local/r/output/")
+```
+
+
+## Parallelisation and reproducibility setup
+```{r, include=FALSE}
+#Parallelisation setup, using parallel package
+
+## mclapply.hack.R
+## Nathan VanHoudnos
+## nathanvan AT northwestern FULL STOP edu
+## July 14, 2014
+##
+## A script to implement a hackish version of parallel:mclapply() on Windows machines.
+## On Linux or Mac, the script has no effect beyond loading the parallel library. 
+
+require(parallel)    
+
+#Define the hack
+mclapply.hack <- function(...){
+  #Create a cluster
+  size.of.list <- length(list(...)[[1]])
+  cl <- makeCluster(min(size.of.list, detectCores()))
+  
+  #Find out the names of the loaded packages 
+  loaded.package.names <- c(
+    sessionInfo()$basePkgs, #Base packages
+    names(sessionInfo()$otherPkgs)) ## Additional packages
+  
+  tryCatch({
+    #Copy over all of the objects within scope to all clusters. 
+    this.env <- environment()
+    while(identical( this.env, globalenv()) == FALSE){
+      clusterExport(cl,ls(all.names=TRUE, env=this.env), envir=this.env)
+      this.env <- parent.env(environment())}
+    clusterExport(cl, ls(all.names=TRUE, env=globalenv()), envir=globalenv())
+    
+    #Load the libraries on all the clusters
+    #N.B. length(cl) returns the number of clusters
+    parLapply( cl, 1:length(cl), function(xx){lapply(loaded.package.names, function(yy){require(yy , character.only=TRUE)})})
+    
+    #Run the lapply in parallel 
+    return( parLapply( cl, ...) )
+  }, finally = {stopCluster(cl)} #Stop the cluster
+  )
+}
+
+#Warn the user if they are using Windows
+if( Sys.info()[['sysname']] == 'Windows' ){message(paste0(
+  "\n", 
+  "   *** Microsoft Windows detected ***\n",
+  "   \n",
+  "   For technical reasons, the MS Windows version of mclapply()\n",
+  "   is implemented as a serial function instead of a parallel\n",
+  "   function.",
+  "   \n\n",
+  "   As a quick hack, we replace this serial version of mclapply()\n",
+  "   with a wrapper to parLapply() for this R session. Please see\n\n",
+  "     http://www.stat.cmu.edu/~nmv/2014/07/14/implementing-mclapply-on-windows \n\n",
+  "   for details.\n\n"))
+}
+
+#If the OS is Windows, set mclapply to the hackish version. Otherwise, leave the definition alone. 
+mclapply <- switch(Sys.info()[['sysname']],
+                   Windows = {mclapply.hack}, 
+                   Linux   = {mclapply},
+                   Darwin  = {mclapply})
+
+
+clusters <- makeCluster(detectCores())
+rm(clusters) #Cleaning useless variable
+
+
+#Reproductibiility setup
+set.seed(154) #Ensures that the random numbers generated in the script are the same over many machines
+```
+
+
+
+
+# READ ME
+```{r}
+# Abbreviations used:
+# - _c: object with its projection corrected (using projectionCorrection())
+# - _wc: object with its projection not corrected
+# 
+# - iL: IndividualLines
+# - _champ: object with Champfromier extent (Note: points_dataset and tracks_dataset are with Champfromier extent too)
+# - _new: New version of an existing file, recreated by me during the internship (Note: iL18_new is compacted in iL18new)
+# 
+# - _r: raster object
+# 
+# - _d: distance (to ski routes)
+# - _env: environmental variables
+# - _wlb: wlb (Ski piste on Champfromier)
+```
+
+## R execution level
+```{r}
+# The variable thereafter is used to set the coorect R execution level, which means:
+# - 0: to decompress all the files from the raw_data, write all the created files and plot all the grahs and all the maps contained in the script,
+# - 1: to write all the created files and plot all the grahs all the maps contained in the script 
+# - 2 is for daily use
+
+r_execution_level=2
+```
+
+
+
+
+# DATASETS CREATION
+## Functions defintion
+```{r}
+#Clip a dataset with the study area contour
+datasetCreator=function(polygon, original_dataset, output_dataset="new"){
+  n=nrow(original_dataset)
+  id=(1:n)
+  
+  list_in_study_area<-st_intersects(polygon, original_dataset)
+  #print(list_in_study_area)
+  
+  in_study_area=vector(length=n)
+  original_dataset<-cbind(original_dataset, in_study_area)
+  
+  for(i in (1:n)){
+    for(j in (1:length(list_in_study_area))){
+      if(length(list_in_study_area[[j]])!=0){
+        for(k in (1:length(list_in_study_area[[j]]))){
+          if(id[i]==list_in_study_area[[j]][k]){
+            original_dataset$in_study_area[i]<-"1"
+  }}}}}
+  
+  new_dataset<-subset(original_dataset, original_dataset$in_study_area=="1") #Creation of the subset
+  new_dataset<-subset(new_dataset, select=-in_study_area) #Remove the useless champ column
+  
+  if(output_dataset=="old"){return(original_dataset)} 
+  else {return(new_dataset)}
+}
+```
+
+
+## Study area contours and leaflet module (Champfromier)
+```{r}
+#We work with the uncorrected contour (see CAP_data_cleaning.Rmd for more details)
+contour_champ=readRDS(file.path(owndatapath, "contour_champ_wc.rds")) 
+
+#Defintion of the leaflet module for all the spatial data visualisation in the script
+leaf<-leaflet() %>% 
+  addTiles() %>%
+  addPolygons(data=st_transform(contour_champ, 4326), col = "grey")
+if(r_execution_level<2){print(leaf)}
+```
+
+
+## Tracks dataset
+### IndividualLines2018_new importation
+```{r}
+iL18new=readRDS(file.path(owndatapath, "IndividualLines2018_new_AIN_GESTION.rds"))
+if(r_execution_level<2){leaf %>% addPolylines(data = st_transform(st_geometry(iL18new), 4326), col = "black")}
+```
+
+### tracks_dataset creation
+```{r}
+#Justification of the "purification" of iL18new_champ to build tracks_dataset:
+# - "OBJECTID", "temps_parc" & "DULP" are empty,
+# - "NeigeCouve",  "NeigeJours",  "NeigeQuali", "Twice" & "ID_2" are not complete,
+# - "Longueur" is a duplicate of the "Length" field
+# - "OBJECTID_2", "UN_code", "Nom", "Dept", "SHAPE_Leng" & "SHAPE_Area" are not useful as we are working on a single massif.
+
+#iL18new_champ creation
+iL18new_champ<-datasetCreator(contour_champ, iL18new)
+
+#Extraction of useful fields
+tracks_dataset<-iL18new_champ[, c("new_id", "PROSPID", #Unique identifiers
+                               "Date_prosp", "Year", "Month", "Day", "SAISON", #Temporal data
+                               "Observateu", "ObserNOM", "DUPL", #Observer fields (DUPL will be useful later)
+                               "Length", "file_origin", "geometry")] #Useful tracks features
+
+#Setting correct column names
+colnames(tracks_dataset) <- list("new_id", "prospid", 
+                                 "date", "year",	"month",	"day",	"season", 
+                                 "observer", "observer_name", "correspondance_field", 
+                                 "length", "file_origin", "geometry")
+
+#Setting up tracks_dataset
+rownames(tracks_dataset)<-c(1:nrow(tracks_dataset))
+tracks_dataset$prospid<-tracks_dataset$new_id
+
+#Plotting and writing the complete iL18new_champ dataset
+if(r_execution_level<2){
+  leaf %>% addPolylines(data = st_transform(st_geometry(tracks_dataset), 4326), col = "black")
+  st_write(tracks_dataset, paste0(owndatapath, "/", "tracks_dataset.shp"))
+  saveRDS(tracks_dataset, paste0(owndatapath, "/", "tracks_dataset.rds"))
+}
+
+rm("iL18new", "iL18new_champ") #Cleaning useless variables
+```
+
+
+## Observations dataset
+### Importation of observation datasets
+```{r}
+#Thesis dataset
+obs_thesis=readRDS(file.path(owndatapath, "obs_thesis_c.rds"))
+if(r_execution_level<2){print(leaf %>% addCircles(data = st_transform(st_geometry(obs_thesis), 4326), col = "black"))}
+
+#GTJ dataset
+obs_gtj=readRDS(file.path(owndatapath, "obs_gtj.rds"))
+if(r_execution_level<2){print(leaf %>% addCircles(data = st_transform(st_geometry(obs_gtj), 4326), col = "black"))}
+
+##Fusion dataset
+obs_fusion=readRDS(file.path(owndatapath, "obs_fusion.rds"))
+if(r_execution_level<2){print(leaf %>% addCircles(data = st_transform(st_geometry(obs_fusion), 4326), col = "black"))}
+
+#Points and tracks dataset
+obs_gtj_champ=readRDS(file.path(owndatapath, "obs_gtj_champ.rds"))
+if(r_execution_level<2){print(leaf %>% addCircles(data = st_transform(st_geometry(obs_gtj_champ), 4326), col = "black"))}
+```
+
+### points_dataset creation
+```{r}
+#Selection of the points that are associated to a track
+points_dataset=obs_gtj_champ[obs_gtj_champ$prospid!="", ]
+
+#Selection of the dates corresponding to winter prospections
+points_dataset=points_dataset[points_dataset$Date %in% c("2010/08/31", "2011/02/11", "2011/03/24", "2013/04/08", "2013/04/15", "2013/04/17", "2013/04/24", "2014/04/19", "2014/04/22", "2014/04/24", "2014/04/25", "2014/05/02", "2018/02/23", "2018/02/26", "2018/03/12", "2018/03/26", "2018/04/06", "2018/04/11", "2018/04/17"), ]
+
+#Plotting and writing points_dataset
+if(r_execution_level<2){
+  leaf %>% addCircles(data = st_transform(st_geometry(points_dataset), 4326), col = "black")
+  st_write(points_dataset, paste0(owndatapath, "/", "points_dataset.shp"))
+  saveRDS(points_dataset, paste0(owndatapath, "/", "points_dataset.rds"))
+}
+
+rm("obs_thesis", "obs_gtj", "obs_gtj_champ", "obs_fusion") #Cleaning useless variables
+```
+
+
+
+
+# ANALYSIS
+## Functions defintion
+```{r}
+if(r_execution_level==0){
+  #Extraction function
+  filesExtractor=function(archive, path_to_archive, files_to_extract, path_of_files_inside_zip, outputfolder){
+    output_folder_name=strsplit(archive, ".zip")#Extraction output folder setup
+    
+    if(files_to_extract=="ALL"){
+      files_to_extract=unzip(paste0(path_to_archive, "/", archive), 
+                             list=TRUE)}
+    
+    if(is.na(path_of_files_inside_zip)){path_of_files_inside_zip=vector(length=0)}
+    
+    #Extraction loop
+    for (i in files_to_extract) {
+      j <- paste0(path_of_files_inside_zip, i) #Path of the files to extract in the zip
+      unzip(paste0(path_to_archive, "/", archive), 
+            exdir = paste0(outputfolder, "/", output_folder_name),
+            files = j)
+      
+      if(!is.empty(path_of_files_inside_zip)){
+        #Moving the generated files to output_folder_name
+        file.move(paste0(outputfolder, "/", output_folder_name, "/", j), paste0(outputfolder, "/", output_folder_name, "/")) 
+        
+        #Deleting useless (and empty) folders
+        folder_to_delete=unlist(strsplit(path_of_files_inside_zip, "/"))
+        dir_delete(paste0(outputfolder, "/", output_folder_name, "/", folder_to_delete[1]))
+      }}}
+}
+
+
+#Append a part of a formula in an existing formula
+append_formula=function(formula, text){as.formula(paste0(as.character(formula)[1], as.character(formula)[2], text))}
+append_formula2=function(text, formula){as.formula(paste0(text, as.character(formula)[1], as.character(formula)[2]))}
+
+
+#Rebuild the geometry of an object that isn't that well coded
+geometry_rebuilder=function(x_column, y_column){
+  geometry=NULL
+  
+  x=unlist(as.numeric(x_column))
+  y=unlist(as.numeric(y_column))
+  
+  for(i in 1:length(x)){geometry=rbind(geometry, st_geometry(st_point(c(x[i], y[i]))))}
+
+  geometry=st_sfc(geometry)
+  st_crs(geometry)<-2154
+  
+  return(geometry)
+}
+
+
+#Creation of background_points to ensure correct comparison between models
+background_points_creator=function(time_interval, output="table"){
+  tracks=as(tracks_dataset[tracks_dataset$year %in% time_interval, ], Class="Spatial")
+  tracks@data$PROSPID<-tracks@data$prospid
+  tracks@data$Date_prosp<-tracks@data$date
+  
+  background_points<-RANDOM_POINTS(tracks, n=10000, logplineobj=fitlogspline, type="random")
+  background_points<-data.frame(X=background_points$x0, Y=background_points$y0, Pres=0)
+  
+  if(output=="table"){return(background_points)} 
+  else {leaf %>% addCircles(data = st_transform(st_geometry(geometry_rebuilder(background_points[, 1], background_points[, 2])), 4326), col = "black")}
+}
+
+
+#Creation of models
+models=function(model_number, model_method="dwpr", time_interval=study_period, predictors_local=predictors, background_points, environmental_raster=env_r_champ, output="map"){
+  #Creation of all the necessary files
+  ##Keeping only the predictors of the model
+  m_env_r_champ<-subset(environmental_raster, predictors_local)
+  m_env_r_champ_table=as.data.frame(na.omit(rasterToPoints(m_env_r_champ)))
+  
+  
+  #Presence and absence dataset creation
+  ##Presence dataframe creation
+  presence_points=data.frame(st_coordinates(points_dataset[points_dataset$Annee %in% time_interval, ]), Pres=1)
+  
+  ##Absence dataframe creation is done by the function called background_points_creator
+  
+  ##Merge dataframes
+  presence_absence_points=rbind(presence_points, background_points) 
+  
+  
+  #Extraction of raster values corresponding to points in the dataframe
+  coordinates(presence_absence_points)<-~X + Y
+  proj4string(presence_absence_points)<-st_crs(points_dataset)$proj4string
+  presence_absence_points@data<-cbind(presence_absence_points@data, extract(m_env_r_champ, presence_absence_points))
+  presence_absence_points=na.omit(as.data.frame(presence_absence_points))
+  
+  #Preparing data for Maxnet functions
+  presence_data<-as.vector(presence_absence_points$Pres)
+  predictors_maxnet<-presence_absence_points[, c(predictors)]
+  
+  #Maxnet model creation
+  formula<-maxnet.formula(presence_data, predictors_maxnet, classes="lq")
+  formula=append_formula(formula, "-I(Ski^2)")
+  
+  predictor=m_env_r_champ_table[, c("x", "y")]
+  
+  if(model_method=="maxent" | model_method=="maxnet"){
+    maxent_model<-maxnet(presence_data, predictors_maxnet, f=formula, regmult=1)
+    betas=data.frame(names(maxent_model[["betas"]]), maxent_model[["betas"]])
+    
+    predictor$predicted=predict(maxent_model, m_env_r_champ_table, type="exponential", clamp=FALSE)[, 1]
+  } else {
+    p.wt=rep(1.e-6, nrow(presence_absence_points)) 
+    p.wt[presence_absence_points$Pres==0]=1548.81/sum(presence_absence_points$Pres==0) #1548.81 is the area of Champfromier
+    
+    dwpr=glm(as.formula(paste0("presence_data/p.wt", paste0(c(as.character(formula), "+1"), collapse=""))), family=poisson(), 
+             weights=p.wt, data=presence_absence_points)
+    betas=data.frame(names(dwpr[["coefficients"]]), dwpr[["coefficients"]])
+    
+    predictor$predicted=predict(dwpr, m_env_r_champ_table, type="response")
+    
+    sd=data.frame(rownames(coef(summary(dwpr))), coef(summary(dwpr))[, "Std. Error"])
+    colnames(sd)=c("predictors", model_number)
+    rownames(sd)=1:nrow(sd)
+  }
+
+  #Map creation
+  map=raster::rasterFromXYZ(predictor, res=c(25,25))
+  crs(map)<-"+proj=lcc +lat_1=49 +lat_2=44 +lat_0=46.5 +lon_0=3 +x_0=700000 +y_0=6600000 +ellps=GRS80 +units=m +no_defs"
+  
+  
+  #Betas_list
+  colnames(betas)=c("predictors", model_number)
+  rownames(betas)=1:nrow(betas)
+  
+  
+  if(output!="all"){return(get(output))} 
+  else {
+    if(model_method=="maxent" | model_method=="maxnet"){return(list(maxent_model, betas, map))}
+    else {return(list(dwpr, list(betas, sd), map))}}
+}
+
+
+palette=function(object, palette_name="Set1"){return(rep(brewer.pal(n=8, name=palette_name), ceiling(length(object)/8))[1:length(object)])}
+density_gradient_creator=colorRampPalette(c("#000b7e","#f01a72", "#feef22"))
+
+
+#Sorting models betas_table in a custom alphabetical order (by distinguishing "raw" predictors and the squared ones)
+model_table_reorderer=function(table){
+  table=data.frame(table)
+  
+  table_part1=table[substr(table$predictors, 1, 2)!="I(", ]
+  table_part1=table_part1[order(as.character(table_part1$predictors)), ]
+  
+  table_part2=table[substr(table$predictors, 1, 2)=="I(", ]
+  table_part2=table_part2[order(as.character(table_part2$predictors)), ]
+  
+  table=rbind(table_part1, table_part2)
+  rownames(table)=1:nrow(table)
+  return(table)
+}
+
+
+betas_plot=function(betas_table, sd_table=NULL, lines=TRUE, time_interval=study_period){
+  x_year=rep(time_interval, each=nrow(betas_table))
+  
+  predictors=rep(betas_table[, "predictors"], times=length(time_interval))
+  y_betas=as.numeric(as.character(unlist(betas_table[, !(names(betas_table)=="predictors")])))
+  
+  pal=palette(betas_table[, "predictors"])
+  df=data.frame(cbind(x_year, as.character(predictors), y_betas))
+  
+  graph=ggplot(data=df, aes(x_year, as.numeric(as.character(y_betas)), group=predictors)) +
+             geom_point(aes(color=predictors)) + scale_color_manual(values=pal) + 
+             ggtitle(i) + xlab(expression("Year")) + ylab(expression("Predictor value"))
+  
+  if(lines==TRUE){graph=graph+geom_line(aes(color=predictors))}
+  
+  if(!is.null(sd_table)){
+    ci=2*as.numeric(as.character(unlist(sd_table[, 2:5])))
+    df=data.frame(cbind(x_year, as.character(predictors), y_betas, ci))
+    
+    ci_minus=y_betas-ci
+    ci_bonus=y_betas+ci
+    
+    graph=graph+geom_errorbar(aes(
+      x=x_year, ymin=as.numeric(as.character(ci_minus)), ymax=as.numeric(as.character(ci_bonus)), color=predictors), 
+      width=0.1)}
+  
+  return(plot(graph))
+}
+
+
+models2=function(model_number, 
+                 model_method="dwpr", raster_method="density", sigma=140, 
+                 time_interval=study_period, predictors_local=predictors, 
+                 ski_routes, modified_ski_routes, environmental_raster=env_r_champ, 
+                 output="intensity_table"){
+  #Distance rasters creation
+  if(raster_method=="distance"){
+    old_r=distance(rasterize(ski_routes, environmental_raster))
+    old_r=mask(crop(old_r, extent(contour_champ)), contour_champ)
+    
+    new_r=distance(rasterize(modified_ski_routes, environmental_raster))
+    new_r=mask(crop(new_r, extent(contour_champ)), contour_champ)
+  } else {
+    ski_routes_points=st_coordinates(st_cast(ski_routes, "POINT")[, "geometry"])
+    ppp_object=ppp(ski_routes_points[, 1], ski_routes_points[, 2], window=as.owin(contour_champ))
+    
+    old_r=raster(density(ppp_object, sigma=sigma))
+    old_r=resample(old_r, environmental_raster)
+    crs(old_r)="+proj=lcc +lat_1=49 +lat_2=44 +lat_0=46.5 +lon_0=3 +x_0=700000 +y_0=6600000 +ellps=GRS80 +units=m +no_defs"
+    
+    if(substr(substitute(modified_ski_routes), nchar(substitute(modified_ski_routes))-1, nchar(substitute(modified_ski_routes)))!="_r"){
+      ski_routes_wlb_points=st_coordinates(st_cast(modified_ski_routes, "POINT")[, "geometry"])
+      ppp_object=ppp(ski_routes_wlb_points[, 1], ski_routes_wlb_points[, 2], window=as.owin(contour_champ))
+      
+      new_r=raster(density(ppp_object, sigma=sigma))
+      new_r=resample(new_r, environmental_raster)
+      crs(new_r)="+proj=lcc +lat_1=49 +lat_2=44 +lat_0=46.5 +lon_0=3 +x_0=700000 +y_0=6600000 +ellps=GRS80 +units=m +no_defs"
+    } else {
+      new_r=resample(modified_ski_routes, old_r)
+    }
+  }
+  difference_map=old_r-new_r #Difference map raster
+  maps=list(old_r, new_r, difference_map) #Maps collection
+  names(maps)=c("old_r", "new_r", "difference_map")
+  
+  
+  #Manual normalisation
+  mean_old_r=mean(getValues(old_r), na.rm=TRUE)
+  sd_old_r=sd(getValues(old_r), na.rm=TRUE)
+  norm_old_r=(old_r-mean_old_r)/sd_old_r
+  
+  norm_new_r=(new_r-mean_old_r)/sd_old_r
+  
+  
+  #Adapting environmental rasters
+  m_env_r=dropLayer(environmental_raster, "Ski")
+  m_env_r=addLayer(m_env_r, norm_old_r)
+  names(m_env_r)=c(names(env_r)[!(names(env_r) %in% "Ski")], "Ski")
+  
+  m_new_env_r=dropLayer(environmental_raster, "Ski")
+  m_new_env_r=addLayer(m_new_env_r, norm_new_r)
+  names(m_new_env_r)=c(names(env_r)[!(names(env_r) %in% "Ski")], "Ski")
+  
+  
+  #Model computation
+  ##Keeping only the predictors of the model
+  m_new_env_r=subset(m_new_env_r, predictors_local)
+  m_new_env_r_table=as.data.frame(na.omit(rasterToPoints(m_new_env_r)))
+
+  for (i in time_interval){
+    m_yearly_model=models(model_number=paste0(model_number, "_", i), model_method=model_method, time_interval=i, environmental_raster=m_env_r, background_points=get(paste0("bg_pts_", i)), output="all")
+    
+    ##Betas_list
+    if(i==study_period[1]){m_betas_table=m_yearly_model[[2]][[1]]}
+    else {m_betas_table=merge(m_betas_table, m_yearly_model[[2]][[1]], by="predictors", all.x = TRUE, all.y = TRUE)}
+    
+    if(model_method=="dwpr"){ #Sd_list
+      if(i==study_period[1]){m_sd_table=m_yearly_model[[2]][[2]]}
+      else {m_sd_table=merge(m_sd_table, m_yearly_model[[2]][[2]], by="predictors", all.x = TRUE, all.y = TRUE)}
+    }
+    
+    
+    #Reevaluation of the model with alternative ski routes raster
+    new_predictor=m_new_env_r_table[, c("x", "y")]
+    if(model_method=="dwpr"){new_predictor$predicted=predict(m_yearly_model[[1]], m_new_env_r_table, type="response")}
+    else {new_predictor$predicted=predict(m_yearly_model[[1]], m_new_env_r_table, type="exponential", clamp=FALSE)[, 1]}
+    
+    new_map=raster::rasterFromXYZ(new_predictor, res=c(25,25))
+    crs(new_map)<-"+proj=lcc +lat_1=49 +lat_2=44 +lat_0=46.5 +lon_0=3 +x_0=700000 +y_0=6600000 +ellps=GRS80 +units=m +no_defs"
+    
+    difference_map=new_map-m_yearly_model[[3]] #Difference map
+    
+    
+    #Collection of the results
+    ##Models
+    if(i==study_period[1]){models_stack=list(m_yearly_model[[1]])}
+    else {models_stack[[length(models_stack)+1]]=m_yearly_model[[1]]}
+    
+    
+    ##Intensity table
+    m_intensity=data.frame(c("old_map_indices_sum", "new_map_indices_sum", "percentage_diff_density_indices"),
+                           c(round(cellStats(m_yearly_model[[3]], "sum"), digits=2), #old_map
+                             round(cellStats(new_map, "sum"), digits=2), #new_map
+                             round(((cellStats(difference_map, "sum")*100)/cellStats(new_map, "sum")), digits=2))) #% of difference between both
+    colnames(m_intensity)=c("legend", paste0(model_number, "_", i))
+    rownames(m_intensity)=1:nrow(m_intensity)
+    
+    if(i==study_period[1]){intensity_table=m_intensity}
+    else {intensity_table=merge(intensity_table, m_intensity, by="legend", all.x = TRUE, all.y = TRUE)}
+    
+    ##Maps
+    m_maps=list(m_yearly_model[[3]], new_map, difference_map)
+    names(m_maps)=c(paste0(model_number, "_", i, "_map"), paste0(model_number, "_", i, "_mod_map"), paste0(model_number, "_", i, "_diff_map"))
+    maps=append(maps, m_maps)
+  }
+  names(models_stack)=paste0(model_number, "_", time_interval)
+  
+  m_betas_table=model_table_reorderer(m_betas_table)
+  if(model_method=="dwpr"){
+    m_sd_table=model_table_reorderer(m_sd_table)
+    tables=list(m_betas_table, m_sd_table, intensity_table)
+    names(tables)=c("betas_table", "sd_table", "intensity_table")
+  } else {
+    tables=list(m_betas_table, intensity_table)
+    names(tables)=c("betas_table", "intensity_table")
+  }
+  
+  if(output!="all"){return(get(output))} 
+  else {
+    if(model_method=="dwpr"){list=list(models_stack, tables, maps)}
+    else {list=list(models_stack, m_betas_table, maps)}}
+  names(list)=c("models_stack", "tables", "maps")
+  return(list)
+}
+
+
+env_cleaner=function(to_clean, to_keep=NA){
+  env_names=names(as.list(.GlobalEnv))
+  to_clean=env_names[grep(to_clean, env_names)]
+  if(!is.na(to_keep)){to_clean=to_clean[to_clean!=to_keep]}
+  rm(list=to_clean, envir=.GlobalEnv)
+}
+```
+
+
+## Variables setup
+### Logspline
+```{r}
+fitlogspline=logspline(points_dataset$distance_to_track, lbound=0)
+if(r_execution_level<2){
+  {hist(as.numeric(points_dataset$distance_to_track), freq=FALSE, 20)
+  lines(seq(0, 100, len=length(points_dataset)), dlogspline(seq(0, 100, len=length(points_dataset)), fitlogspline), col="red")}}
+```
+
+### Environmental variables raster
+```{r}
+env_r=raster::stack(
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_H.nb0.5_1relative_density.tif"), #Canopy0501
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_H.nb2_5relative_density.tif"), #Canopy0205
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_H.nb10_20relative_density.tif"), #Canopy1020
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_H.nb20_30relative_density.tif"), #Canopy2030
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_H.nb0.5_1ratio.tif"), #penetrationratio0501
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_H.nb2_5ratio.tif"), #penetrationratio0205
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_H.nb5_10ratio.tif"), #penetrationratio0510
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_H.simpson.tif"), #Simpson
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "Distance_MV_1_8ha_MeanskiAIN.tif"), #Ski
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "Distance_MV_1_8ha_MeanRoadAIN_IGN.tif"), #Road
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_H.nb0.5_1relative_density.tif"), #Canopy0501sd
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_H.nb2_5relative_density.tif"), #Canopy0205sd
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_H.nb10_20relative_density.tif"), #Canopy1020sd
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_H.nb20_30relative_density.tif"), #Canopy2030sd
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_H.nb0.5_1ratio.tif"), #penetrationratio0501sd
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_H.nb2_5ratio.tif"), #penetrationratio0205sd
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_H.nb5_10ratio.tif"), #penetrationratio0510sd
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_H.simpson.tif"), #Simpsonsd
+  
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_Treeinf10.density.tif"), #Tree_densityinf10
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_Tree10.density.tif"), #Tree_density10
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_Tree20.density.tif"), #Tree_density20
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_Tree.giniH.tif"), #Tree_gini
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_G.s1000_Inf.tif"), #grassland
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_G.s200_1000.tif"), #middle_gap
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_G.s20_200.tif"), #small_gap
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_Treeinf10.density.tif"), #Tree_densityinf10sd
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_Tree10.density.tif"), #Tree_density10sd
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_Tree20.density.tif"), #Tree_density20sd
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_Tree.giniH.tif"), #Tree_ginisd
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_G.s1000_Inf.tif"), #grasslandsd
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_G.s200_1000.tif"), #middle_gapsd
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_G.s20_200.tif"), #small_gapsd
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_Tree.sumS.tif"), #Tree_sumS
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "AINraster_MV_1_8ha_sdcor_Tree.sumS.tif"), #Tree_sumSsd
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "raster_MV_1_8ha_Mean_propConifG2.tif"), #Prop_resG
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/"), "raster_MV_1_8ha_sd_propConifG2.tif"), #Prop_resGsd
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "bati_surfaceratio_1_8ha_tot2.tif"), #Bat
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "AINraster_MV_1_8ha_Meancor_H.p25.tif"), #Q25
+  
+  paste0(file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/"), "raster_MV_1_8ha_Mean_Gha.tif"), #Gha
+  quick=TRUE
+)
+
+
+names(env_r)=c("Canopy0501", "Canopy0205",  "Canopy1020", "Canopy2030", "penetrationratio0501", "penetrationratio0205", "penetrationratio0510", "Simpson", "Ski", "Road",  "Canopy0501sd", "Canopy0205sd", "Canopy1020sd", "Canopy2030sd", "penetrationratio0501sd", "penetrationratio0205sd", "penetrationratio0510sd", "Simpsonsd", 
+                           "Tree_densityinf10", "Tree_density10", "Tree_density20", "Tree_gini", "grassland", "middle_gap", "small_gap",  "Tree_densityinf10sd", "Tree_density10sd", "Tree_density20sd", "Tree_ginisd", "grasslandsd", "middle_gapsd", "small_gapsd", "Tree_sumS", "Tree_sumSsd", "Prop_resG", "Prop_resGsd", "Bat", "Q25", "Gha")
+```
+
+### Environmental variables on Champfromier
+```{r, fig.width=20, fig.height=20}
+env_r_champ=mask(crop(env_r, extent(contour_champ)), contour_champ)
+env_r_champ<-normImage(env_r_champ, norm=TRUE)
+
+crs(env_r_champ)="+proj=lcc +lat_1=49 +lat_2=44 +lat_0=46.5 +lon_0=3 +x_0=700000 +y_0=6600000 +ellps=GRS80 +units=m +no_defs"
+if(r_execution_level<2){plot(env_r_champ)}
+```
+
+### Study of one predictor
+```{r, fig.width=10, fig.height=10}
+predictor_to_test="Ski"
+if(r_execution_level<2){
+  {plot(raster(env_r_champ, predictor_to_test), main=predictor_to_test)
+  plot(st_geometry(contour_champ), add=TRUE, border="black", lwd=2)
+  #plot(st_geometry(points_dataset), add=TRUE, col="red", lwd=20)
+  plot(st_geometry(tracks_dataset), add=TRUE)}
+}
+
+rm("predictor_to_test") #Cleaning useless variable
+```
+
+### Altitude digital terrain model
+```{r}
+alt_dtm_west=raster(paste0(rawdatapath, "/mnt/eu_dem_v11_E30N20.TIF"))
+contour_champ_mod=st_transform(contour_champ, crs(alt_dtm_west))
+alt_dtm_west_champ=mask(crop(alt_dtm_west, extent(contour_champ_mod)), contour_champ_mod)
+
+alt_dtm_east=raster(paste0(rawdatapath, "/mnt/eu_dem_v11_E40N20.TIF"))
+alt_dtm_east_champ=mask(crop(alt_dtm_east, extent(contour_champ_mod)), contour_champ_mod)
+
+alt_dtm_champ=merge(alt_dtm_west_champ, alt_dtm_east_champ)
+alt_dtm_champ=projectRaster(alt_dtm_champ, crs=crs(env_r_champ))
+
+if(r_execution_level<2){
+  leaf %>% addRasterImage(alt_dtm_champ)
+  writeRaster(alt_dtm_champ, paste0(owndatapath, "/alt_dtm_champ.tif"))}
+
+env_cleaner("alt_dtm", "alt_dtm_champ")
+rm("contour_champ_mod")
+```
+
+
+
+## Global parameters
+```{r}
+study_period=sort(intersect(unique(tracks_dataset$year), unique(points_dataset$Annee)))
+predictors=c("Gha", "Tree_density20sd", "Tree_densityinf10", "middle_gap", "grassland", "Tree_gini", "Ski")
+m_env_r_champ<-subset(env_r_champ, predictors)
+
+
+#Creation of a table to evaluate the power of each map
+tracks_length=points_number=vector(length=length(study_period))
+for (i in 1:length(study_period)){
+  tracks_length[i]=round(st_length(st_union(tracks_dataset[tracks_dataset$year==study_period[i], ])), digits=2)
+  points_number[i]=nrow(tracks_dataset[points_dataset$Annee==study_period[i], ])}
+models_power_table=cbind(study_period, tracks_length, points_number)
+
+
+#Plooting the data (points+tracks) we have each year
+for (i in study_period){print(leaf %>% 
+          addPolylines(data = st_transform(tracks_dataset[tracks_dataset$year==i, ], 4326), col = "red") %>%
+          addCircles(data = st_transform(points_dataset[points_dataset$Annee==i, ], 4326), col = "blue"))}
+
+
+#Background points creation to ensure comparison between models
+bg_pts_all=background_points_creator(study_period)
+for(i in study_period){
+  yearly_background_points=background_points_creator(i)
+  assign(paste0("bg_pts_", i), yearly_background_points)}
+
+
+#Ski routes data preparation
+##Extraction
+if(r_execution_level==0){filesExtractor("anouk_ski_pistes.zip", rawdatapath,
+                                       c("Itin_raires.dbf", "Itin_raires.sbn", "Itin_raires.sbx", "Itin_raires.shp", "Itin_raires.shx"), 
+                                       NA, anoukdatapath)}
+
+##Global
+ski_routes=st_read(file.path(anoukdatapath, "anouk_ski_pistes/Itin_raires.shp"))
+st_crs(ski_routes)<-27572
+ski_routes=st_transform(ski_routes, 2154)
+if(r_execution_level<2){leaf %>% addPolylines(data = st_transform(st_geometry(ski_routes), 4326), col = "black")}
+
+#On Champfromier
+ski_routes_champ=datasetCreator(contour_champ, ski_routes)
+if(r_execution_level<2){leaf %>% addPolylines(data = st_transform(st_geometry(ski_routes_champ), 4326), col = "black")}
+
+
+#Cleaning useless variables
+rm("tracks_length", "points_number", "yearly_background_points")
+```
+
+
+
+## m0: All data (Maxent)
+```{r}
+m0_map=models("m0", "maxent", study_period, predictors, bg_pts_all)
+
+plot(m0_map, main="m0_map")
+writeRaster(m0_map, paste0(owndatapath, "/", "m0_map.tif"), overwrite=TRUE, NAflag=-9999, options=c("COMPRESS=LZW"))
+
+rm("m0_map") #Cleaning useless variable
+```
+
+
+## m1: 1 model/year {.tabset}
+### m1a: Maxent
+```{r}
+for (i in study_period){
+  m1a_yearly_model=models(paste0("m1a_", i), "maxent", i, background_points=get(paste0("bg_pts_", i)), output="all")
+  assign(paste0("m1a_", i, "_map"), m1a_yearly_model[3][[1]])
+  plot(m1a_yearly_model[[3]], main=paste0("m1a_", i))
+  writeRaster(m1a_yearly_model[[3]], paste0(owndatapath, "/m1a_", i, "_map.tif"), overwrite=TRUE, NAflag=-9999, options=c("COMPRESS=LZW"))
+  
+  #Betas_list
+  if(i==study_period[1]){m1a_betas_table=m1a_yearly_model[[2]]}
+  else {m1a_betas_table=merge(m1a_betas_table, m1a_yearly_model[[2]], by="predictors", all.x = TRUE, all.y = TRUE)}
+}
+m1a_betas_table=model_table_reorderer(m1a_betas_table)
+betas_plot(m1a_betas_table) #Graph of the evolution of the predictors coefficients (and their quadrature) over the years
+```
+
+
+### m1b: DWPR
+```{r}
+#Model computation
+for (i in study_period){
+  m1b_yearly_model=models(paste0("m1b_", i), "dwpr", i, predictors, get(paste0("bg_pts_", i)), output="all")
+  assign(paste0("m1b_", i, "_map"), m1b_yearly_model[[3]])
+  plot(m1b_yearly_model[[3]], main=paste0("m1b_", i))
+  writeRaster(m1b_yearly_model[[3]], paste0(owndatapath, "/m1b_", i, "_map.tif"), overwrite=TRUE, NAflag=-9999, options=c("COMPRESS=LZW"))
+  
+  #Betas_list
+  if(i==study_period[1]){m1b_betas_table=m1b_yearly_model[[2]][[1]]}
+  else {m1b_betas_table=merge(m1b_betas_table, m1b_yearly_model[[2]][[1]], by="predictors", all.x = TRUE, all.y = TRUE)}
+  
+  #Sd_list
+  if(i==study_period[1]){m1b_sd_table=m1b_yearly_model[[2]][[2]]}
+  else {m1b_sd_table=merge(m1b_sd_table, m1b_yearly_model[[2]][[2]], by="predictors", all.x = TRUE, all.y = TRUE)}
+}
+m1b_betas_table=model_table_reorderer(m1b_betas_table)
+m1b_sd_table=model_table_reorderer(m1b_sd_table)
+
+
+#Figures
+betas_plot(m1b_betas_table, m1b_sd_table)
+betas_plot(m1b_betas_table)
+betas_plot(subset(m1b_betas_table, m1b_betas_table$predictors!="(Intercept)" & !grepl("I(", m1b_betas_table$predictors, fixed=T)))
+
+for (i in c("(Intercept)", predictors)){betas_plot(subset(m1b_betas_table, grepl(i, m1b_betas_table$predictors, fixed=T)),
+                                 subset(m1b_sd_table, grepl(i, m1b_sd_table$predictors, fixed=T)))}
+```
+
+
+### Comparison maps
+```{r}
+for(i in study_period){plot(get(paste0("m1a_", i, "_map"))/get(paste0("m1b_", i, "_map")))}
+
+env_cleaner("m1") #Cleaning useless variables
+```
+
+
+
+
+## m2: Impact of La Biche piste (DWPR) {.tabset}
+### m2a: Distance method
+```{r}
+ski_routes_wlb_champ=ski_routes_champ[ski_routes_champ$oid!="242097", ]
+if(r_execution_level<2){leaf %>% addPolylines(data = st_transform(st_geometry(ski_routes_wlb_champ), 4326), col = "black")}
+
+m2a_model=models2("m2a", raster_method="distance", ski_routes=ski_routes_champ, modified_ski_routes=ski_routes_wlb_champ, output="all")
+
+for(i in 1:length(m2a_model$maps)){plot(m2a_model$maps[[i]], main=names(m2a_model$maps[i]))}
+print(m2a_model$intensity_table)
+betas_plot(m2a_model$tables$betas_table, m2a_model$tables$sd_table)
+
+rm("m2a_model") #Cleaning useless variables
+```
+
+
+### m2b: Density method
+```{r}
+m2b_model=models2("m2b", raster_method="density", ski_routes=ski_routes_champ, modified_ski_routes=ski_routes_wlb_champ, output="all")
+
+for(i in 1:length(m2b_model$maps)){plot(m2b_model$maps[[i]], main=names(m2b_model$maps[i]))}
+print(m2b_model$tables$intensity_table)
+betas_plot(m2b_model$tables$betas_table, m2b_model$tables$sd_table)
+
+rm("ski_routes_wlb_champ", "m2b_model") #Cleaning useless variables
+```
+
+#### Sigma choice
+```{r}
+ski_routes_wlb_champ=ski_routes_champ[ski_routes_champ$oid!="242097", ]
+
+sigma_variation=c(seq(10, 200, by=10), seq(300, 1000, by=100))
+
+aic_response=list()
+for(i in 1:length(sigma_variation)){
+  m2b_model=models2("m2b", raster_method="density", sigma=sigma_variation[i], ski_routes=ski_routes_champ, modified_ski_routes=ski_routes_wlb_champ, output="all")
+  
+  aic=list()
+  for(j in 1:length(study_period)){aic[[j]]=m2b_model$models_stack[[j]]$aic}
+  aic_response[[i]]=mean(as.numeric(aic))
+}
+plot(sigma_variation, aic_response)
+print(cbind(sigma_variation, aic_response))
+
+#The AIC is the lower at sigma=90m
+
+#Cleaning useless variables
+rm(list=c("ski_routes_wlb_champ", "sigma_variation", "aic_response", "m2b_model", "aic")) 
+```
+
+
+
+
+## m3: Impact of different ski pistes (DWPR, density method) {.tabset}
+```{r}
+priorisation_table=data.frame(matrix(nrow=1, ncol=5))
+names(priorisation_table)=c("name", "type", "length", "2018", "mean_study_period")
+
+for (i in 1:length(ski_routes_champ$oid)){
+  ski_routes_mod_champ=ski_routes_champ[ski_routes_champ$oid!=ski_routes_champ$oid[i], ]
+  temp=ski_routes_champ[i, c("oid", "nom", "sous_type")]
+  
+  m3_model=models2("m3", ski_routes=ski_routes_champ, modified_ski_routes=ski_routes_mod_champ, output="all")
+  diff_values=as.numeric(m3_model$tables$intensity_table[3, 2:5])
+  
+  plot(m3_model$maps$difference_map, main=as.character(temp$nom))
+  print(m3_model$tables$intensity_table)
+  
+  priorisation_table=rbind(priorisation_table, c(as.character(temp$nom), as.character(temp$sous_type), round(st_length(temp), digits=2), diff_values[4], mean(diff_values)))
+}
+
+priorisation_table=priorisation_table[-1, ]
+print(priorisation_table)
+
+#plot(priorisation_table$length, priorisation_table$mean_study_period)
+
+rm("ski_routes_mod_champ","temp", "m3_model", "diff_values") #Cleaning useless variables
+```
+
+
+
+
+## m4: Without ski pistes (DWPR, density method)
+### Empty density map creation
+```{r}
+#Without ski pistes
+temp=st_make_grid(contour_champ, n=1) #Creates a square which includes countour_champ boundaries
+temp=raster(as(temp, "Spatial"), resolution=res(env_r_champ)) #Creates a raster with the resolution of env_r_champ
+temp=as.data.frame(na.omit(rasterToPoints(temp))) #Transforms the raster into a table with the coordinates of all the points that were in the raster
+temp=cbind(temp, rep(0, nrow(temp))) #Setting the density of ski pistes of all the points to 0 (i.e. there is no ski pistes on the area)
+
+empty_density_r=raster::rasterFromXYZ(temp, res=c(25,25)) #Recreating the raster with the density data
+crs(empty_density_r)="+proj=lcc +lat_1=49 +lat_2=44 +lat_0=46.5 +lon_0=3 +x_0=700000 +y_0=6600000 +ellps=GRS80 +units=m +no_defs"
+leaf %>% addRasterImage(empty_density_r)
+
+
+rm("ski_routes_points", "ppp_object", "temp") #Cleaning useless variables
+```
+
+### Model computation
+```{r}
+m4_model=models2("m4", ski_routes=ski_routes_champ, modified_ski_routes=empty_density_r, output="all")
+
+for(i in 1:length(m4_model$maps)){plot(m4_model$maps[[i]], main=names(m4_model$maps[i]))}
+print(m4_model$tables$intensity_table)
+betas_plot(m4_model$tables$betas_table, m4_model$tables$sd_table)
+
+#Cleaning useless variables
+rm(list=c("empty_density_r", "m4_model"))
+```
+
+
+
+
+
+# WORK
+## Response plots
+```{r, fig.width=20, fig.height=15}
+#Response plot function
+RESPONSE_df<-function (mod, v){
+  mm = colMeans(as.matrix(mod$data[, -(1:3)]))
+  min = min(mod$data[, v])
+  max = max(mod$data[, v])
+  
+  m <- data.frame(matrix(mm, 100, length(mm), byrow = T))
+  colnames(m) <- names(mm)
+  m[, v] <- seq(min - 0.01 * (max - min), max + 0.01 * (max - min), length = 100)
+  
+  preds <- predict(mod, m, type ="response")
+  w<-data.frame(VAR=m[, v], predi=preds)
+  return(w) 
+}
+
+
+#Parameters
+#Environmental variables parameters
+m_env_r_champ_mean=as.list(t(data.frame(mean=cellStats(m_env_r_champ, "mean"))))
+m_env_r_champ_sd=as.list(t(data.frame(sd=cellStats(m_env_r_champ, "sd"))))
+
+##Model parameters
+for(year in c(study_period, "all")){
+  if(year=="all"){year_bis=study_period} else {year_bis=year}
+  
+  m1b_model=models("m1b", "dwpr", year_bis, predictors, get(paste0("bg_pts_", year)), environmental_raster=m_env_r_champ, output="dwpr")
+  
+  #Data frame computation
+  res_response<-lapply(predictors, FUN=function(x){RESPONSE_df(m1b_model, v=c(x))})
+  res_response<-mapply(function(x, y) "[<-"(x, "predictor", value = y) , x=res_response, y=predictors, SIMPLIFY=F)
+  res_response<-mapply(function(x) "[<-"(x, "year", value = year) , x=res_response, SIMPLIFY=F)
+  res_response<-mapply(function(x, y, z) {"[<-"(x, "VAR", value=x$VAR*y+z)} , x=res_response, y=m_env_r_champ_sd, z=m_env_r_champ_mean, SIMPLIFY=F)
+  response_data <- do.call(rbind, res_response)
+  
+  if(year==study_period[1]){response_data_all=response_data}
+  else {response_data_all=rbind(response_data_all, response_data)}
+}
+
+
+#Plot computation
+predictor_case <- c(
+  "Tree_density10"= " Tree density > 10m",
+  "Ski" = "Distance to ski runs",
+  "Tree_density20sd" = "SD tree density >20m",
+  "grassland"="Proportion of open area (%)",  
+  "middle_gap"="Mean proportion of gaps (200-1000m²)", 
+  "Tree_densityinf10"="Tree density (<10m)", 
+  "Tree_gini"="Tree gini index", 
+  "small_gap"="Mean of gaps proportion (25-200m²)",
+  "small_gapsd"="SD of gaps proportion (25-200m²)", 
+  "Tree_density20"="Mean of tree density (>20m)", 
+  "Gha"="Basal area")
+
+theme_update(axis.text.y=element_text(size=10, face="bold", colour="Black"), 
+             axis.text.x=element_text(size=10, face="bold", colour="Black"), 
+             
+             axis.ticks.x = element_blank(), axis.line.x =  element_line(color="black", size=0.5),
+             axis.line.y =  element_line(color="black", size=0.5), 
+             
+             axis.title.x=element_text(size=15, face="bold", colour="Black"),
+             axis.title.y=element_text(size=15, face="bold", colour="Black"), 
+             
+             plot.title = element_text(hjust = 0.5, size = 25, face = "bold", colour = "black"), 
+             strip.text.x = element_text(size = 18, face = "bold", colour = "Black"),
+             
+             legend.title=element_text(size=25, face = "bold", colour = "black") , 
+             legend.text=element_text(size=20, face = "bold", colour = "black"),
+             
+             legend.key.size = unit(3,"line"),  
+             panel.background = element_rect(fill= "white", colour="black", size=1, linetype="blank"), 
+             legend.position = c(0.8, 0.1), 
+             legend.direction="horizontal")
+
+print(ggplot() + 
+        geom_line(data=response_data_all, aes(x=VAR, y=predi, colour=year), size=1) + 
+        ggtitle("Over the years") + 
+        scale_color_manual(name="Scale",
+                           values=c("2011"="#f8766d", "2013"="#7cae00", "2014"="#00bfc4", "2018"="#c77cff", "all"="#000000"), 
+                           breaks=c("2011", "2013", "2014", "2018", "all"), labels = c("2011", "2013", "2014", "2018", "all")) +
+        xlab("predictors") + ylab("Predictions") + 
+        facet_wrap(~predictor, labeller = labeller(predictor=predictor_case), scales="free"))
+
+
+#Cleaning useless variables
+rm("m_env_r_champ_mean", "m_env_r_champ_sd", "year", "year_bis", "m1b_model", "res_response", "response_data", "response_data_all", "predictor_case")
+```
+
+## Correlation between variables
+```{r, fig.width=20, fig.height=15}
+#Complex method
+pairs(m_env_r_champ)
+
+#Simpler method
+library("corrplot")
+
+m_env_r_champ_table=as.data.frame(na.omit(rasterToPoints(m_env_r_champ)))[, -(1:2)]
+mcor=cor(as.matrix(m_env_r_champ_table), method = c("pearson")) 
+
+cor.mtest <- function(mat, ...) {
+    mat <- as.matrix(mat)
+    n <- ncol(mat)
+    p.mat<- matrix(NA, n, n)
+    diag(p.mat) <- 0
+    for (i in 1:(n - 1)) {
+        for (j in (i + 1):n) {
+            tmp <- cor.test(mat[, i], mat[, j], ...)
+            p.mat[i, j] <- p.mat[j, i] <- tmp$p.value
+    }}
+  colnames(p.mat) <- rownames(p.mat) <- colnames(mat)
+  return(p.mat)
+}
+
+p.mat=cor.mtest(mcor)
+corrplot=corrplot(mcor, method="circle", type="lower", order="hclust", tl.col="black", tl.srt=45, p.mat=p.mat, sig.level=0.05)
+
+
+rm("m_env_r_champ_table", "mcor", "p.mat", "corrplot") #Cleaning useless variables
+```
+
+
+
+
+
+
+ 

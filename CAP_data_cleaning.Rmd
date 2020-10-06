@@ -1,0 +1,1643 @@
+---
+title: "CAP_data_cleaning"
+author: "Vincent Gardet"
+output: html_document
+---
+
+#INITIALISATION
+##R setup
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+
+##Library setup
+```{r setup}
+library(dplyr)
+library(filesstrings)
+library(fs)
+library(geosphere)
+library(GTJ)
+library(leaflet)
+library(logspline)
+library(raster)
+library(RColorBrewer)
+library(sf)
+library(spatstat)
+library(stringr)
+
+set.seed(154)
+```
+
+
+##R execution level
+```{r}
+# The variable thereafter is used to set the coorect R execution level, which means:
+# - 0: to decompress all the files from the raw_data, write all the created files and plot all the grahs and all the maps contained in the script,
+# - 1: to write all the created files and plot all the grahs all the maps contained in the script 
+# - 2 is for daily use
+
+r_execution_level=0
+```
+
+
+##Files hierachy setup
+```{r}
+setwd("D:/Documents/gtj_local/data/") #Chunk working directory
+
+#Path setup
+lidarpath <- file.path("D:/Documents/gtj_local/data/lidar_data/full/DATA/")
+speciespath <- file.path(lidarpath, "Species/CAP/")
+rawdatapath <- file.path("D:/Documents/gtj_local/data/raw_data/")
+scriptpath <- file.path("D:/Documents/gtj_local/r/irstea_git/vignettes/")
+outputpath <- file.path("D:/Documents/gtj_local/r/output/")
+```
+
+
+
+#FILES EXTRACTION
+##GTJ files
+```{r}
+if(r_execution_level==0){
+  setwd("D:/Documents/gtj_local/data/") #Chunk working directory
+
+  #GTJ folder setup
+  dir.create("gtj_data")
+  gtjdatapath <- file.path("D:/Documents/gtj_local/data/gtj_data/")
+  
+  #Extraction function
+  filesExtractor=function(archive, path_to_archive, files_to_extract, path_of_files_inside_zip, outputfolder){
+    output_folder_name=strsplit(archive, ".zip")#Extraction output folder setup
+    
+    if(files_to_extract=="ALL"){
+      files_to_extract=unzip(paste(path_to_archive, "/", archive, sep=""), 
+                  list=TRUE)}
+    
+    if(is.na(path_of_files_inside_zip)){path_of_files_inside_zip=vector(length=0)}
+    
+    #Extraction loop
+    for (i in files_to_extract) {
+      j <- paste(path_of_files_inside_zip, i, sep="") #Path of the files to extract in the zip
+      unzip(paste(path_to_archive, "/", archive, sep=""), 
+        exdir = paste(outputfolder, "/", output_folder_name, sep=""),
+        files = j)
+      
+      if(!is.empty(path_of_files_inside_zip)){
+        #Moving the generated files to output_folder_name
+        file.move(paste(outputfolder, "/", output_folder_name, "/", j, sep=""), paste(outputfolder, "/", output_folder_name, "/", sep="")) 
+        
+        #Deleting useless (and empty) folders
+        folder_to_delete=unlist(strsplit(path_of_files_inside_zip, "/"))
+        dir_delete(paste(outputfolder, "/", output_folder_name, "/", folder_to_delete[1], sep=""))
+  }}}
+  
+  #Function to remove French accents
+  crappyAccentsInFilenamesRemover=function(files, path_to_files, characters_to_remove, original_letter){
+    if(files=="ALL"){files=list.files(path_to_files)}
+    
+    for(i in files){
+      j=unlist(strsplit(i, characters_to_remove)) #Remove the fake characters_to_remove
+      if(length(j)=="2"){j=paste(j[1], original_letter, j[2], sep="")} #Add the original_letter instead
+      if(length(j)=="3"){j=paste(j[1], original_letter, j[2], original_letter, j[3], sep="")} #Add the original_letter instead
+      file.rename(paste(path_to_files, "/", i, sep=""), paste(path_to_files, "/", j, sep=""))
+  }}
+  
+  #Function to generate filenames of the different files used for QGIS
+  qgisExtensions=function(filename){
+    filenames_qgis=vector(length=5)
+    extensionnames_qgis=c(".dbf", ".prj", ".qpj", ".shp", ".shx")
+    for(i in c(1:5)) {filenames_qgis[i]=paste(filename, extensionnames_qgis[i], sep="")}
+    return(filenames_qgis)
+  }
+  
+  
+  #Extraction of the different archives:
+  #To have all the crappy names of the files: filesExtractor("GTJ_datasets.zip", rawdatapath, "ALL", NA, gtjdatapath)
+  filesExtractor("gtj_datasets.zip", 
+                 rawdatapath,
+                 qgisExtensions("Grand tÃ©tras"), 
+                 "Observations Grand tÃ©tras et GÃ©linotte des bois/Mise Ã  jour le 18.02.2020/", 
+                 gtjdatapath)
+  crappyAccentsInFilenamesRemover(qgisExtensions("Grand tÃ©tras"), 
+                       paste(gtjdatapath, "/gtj_datasets/", sep=""), 
+                       "Ã©",
+                       "e")
+  
+  filesExtractor("gtj_old_datasets.zip", rawdatapath, "ALL", NA, gtjdatapath)
+  crappyAccentsInFilenamesRemover("ALL", paste(gtjdatapath, "/gtj_old_datasets/", sep=""), "‚", "e")
+  
+  filesExtractor("gtj_old_obs.zip", rawdatapath, "ALL", NA, gtjdatapath)
+  
+  filesExtractor("gtj_old_tracks.zip", rawdatapath, "ALL", NA, gtjdatapath)
+  
+  
+  ##Second extraction for different files used in QGIS:
+  for(i in c("Aire de prÃ©sence ancienne Grand tÃ©tras", "Aire de type 1 Grand tÃ©tras", "Aire de type 2 Grand tÃ©tras", "DÃ©partements")){
+    filesExtractor("gtj_datasets.zip", 
+                 rawdatapath,
+                 qgisExtensions(i), 
+                 "Observations Grand tÃ©tras et GÃ©linotte des bois/Mise Ã  jour le 18.02.2020/", 
+                 gtjdatapath)
+    
+    crappyAccentsInFilenamesRemover(qgisExtensions(i), paste(gtjdatapath, "/gtj_datasets/", sep=""), "Ã©", "e")
+  }
+  
+  filesExtractor("gtj_datasets.zip", rawdatapath, qgisExtensions("ForÃªts publiques"), 
+                 "Observations Grand tÃ©tras et GÃ©linotte des bois/Mise Ã  jour le 18.02.2020/", gtjdatapath)
+  crappyAccentsInFilenamesRemover(qgisExtensions("ForÃªts publiques"), paste(gtjdatapath, "/gtj_datasets/", sep=""), "Ãª", "e")
+  
+  filesExtractor("gtj_datasets.zip", rawdatapath, qgisExtensions("Communes"), 
+                 "Observations Grand tÃ©tras et GÃ©linotte des bois/Mise Ã  jour le 18.02.2020/", gtjdatapath)
+}
+```
+
+
+##Anouk files
+```{r}
+if(r_execution_level==0){
+  setwd("D:/Documents/gtj_local/data/") #Chunk working directory
+  
+  #Anouk folder setup
+  dir.create("anouk_data")
+  anoukdatapath <- file.path("D:/Documents/gtj_local/data/anouk_data/")
+  
+  #Extraction
+  filesExtractor("anouk_2018_raw_data.zip", rawdatapath, "ALL", NA, anoukdatapath)
+  crappyAccentsInFilenamesRemover("tracÃ©s_GTJ_ONF_2018.rar", paste(anoukdatapath, "/anouk_2018_raw_data", sep=""), "Ã©", "e")
+  
+  #TODO: unrar the 3 archives in "D:/Documents/gtj_local/data/anouk_data/anouk_2018_raw_data/" in separate folders
+  #The following paragraph of code is here to make it quickier:
+  shell(paste0("explorer ", gsub("/", "\\\\", "D:/Documents/gtj_local/data/anouk_data/anouk_2018_raw_data/")), intern = TRUE)
+  wait<-function(time){
+      p1 <- proc.time()
+      Sys.sleep(time)
+      proc.time()-p1}
+  wait(2)
+  system(paste('CMD /C "ECHO', "As R is not able to decompress a rar file yet, you have to do it by yourself : unrar the 3 archives in separate folders from the Explorer window that just appreared.", '&& PAUSE"' ), invisible=FALSE, wait=FALSE) #Only works on Windows
+  
+  filesExtractor("anouk_individualLines_2007_2017.zip", rawdatapath, "ALL", NA, anoukdatapath)
+}
+```
+
+
+##own_data folder creation
+```{r}
+setwd("D:/Documents/gtj_local/data/") #Chunk working directory
+dir.create("own_data")
+owndatapath <- file.path("D:/Documents/gtj_local/data/own_data/")
+```
+
+
+
+
+#DATASETS CREATION
+##Definition of functions useful thereafter
+```{r}
+#Reproject track
+projectionCorrection=function(shape){ # Input shape should be in epsg 2154
+  wrong_crs<-st_crs(st_read(file.path(anoukdatapath, "/anouk_individualLines_2007_2017/IndividualLines2018.shp")))
+  shape<-st_transform(shape, wrong_crs)
+  st_crs(shape) <- 27572
+  shape<-st_transform(shape, 2154)
+  return(shape)
+}
+
+
+#Check the projection of the track : it returns a map with the tracks (or a subset of the data within a year), corrected or not.
+##You also have the ability to change the background map to make better estimations:
+map=c('OpenStreetMap.Mapnik', #Default map
+      'Esri.WorldImagery', #ESRI Satellite map
+      'GeoportailFrance.orthos') #Geoportail Satellite map
+
+projectionChecker=function(dataset, year=NA, background_map){
+  if(!is.na(year)){ #If the function call contains the year argument
+    data_to_check<-subset(dataset, Year==year)
+    st_crs(data_to_check)<-2154} 
+  else {data_to_check<-dataset} #If the function call does not contain the year argument
+  
+  if(names(sort(summary(st_geometry_type(dataset)), decreasing = T))[1]=="MULTILINESTRING"){ #If dataset contains tracks
+    return(leaf %>% 
+           addPolylines(data = st_transform(st_geometry(data_to_check), 4326), col = "red") %>%
+           addPolylines(data = st_transform(st_geometry(projectionCorrection(data_to_check)), 4326), col = "green") %>% 
+           addProviderTiles(background_map)
+         )
+  } else { #If dataset contains points
+    return(leaf %>% 
+           addCircles(data = st_transform(st_geometry(data_to_check), 4326), col = "red") %>%
+           addCircles(data = st_transform(st_geometry(projectionCorrection(data_to_check)), 4326), col = "green") %>% 
+           addProviderTiles(background_map))
+}}
+
+
+#Check if the gpx to shp conversion is without problems
+shpConversionChecker<-function(track_path, track_name_without_extension, gpx_or_GPX){
+  gpx <- read_sf(file.path(track_path, paste(track_name_without_extension, ".", gpx_or_GPX, sep="")), "tracks")
+  st_crs(gpx)<-4326
+  shp <- read_sf(file.path(track_path, paste(track_name_without_extension, ".shp", sep="")))
+  st_crs(shp)<-27572
+  
+  return(leaflet() %>% 
+           addPolylines(data=st_geometry(gpx), col="blue") %>% 
+           addPolylines(data =st_transform(st_geometry(shp), 4326), col="red")) #If the track showed in the plot is purple, no error is detected
+}
+
+
+#Merge a list of tracks
+tracksMerger<-function(tracks_path, tracks_names, tracks_dates=NA, tracks_observers=NA){
+  for(i in 1:length(tracks_names)){
+    track<- read_sf(file.path(tracks_path, tracks_names[i]))
+    
+    if(!is.na(tracks_dates)){ #If the function call contains the tracks_date argument
+      Date<-as.Date(tracks_dates[i], format='%d/%m/%Y')
+      track<-cbind(track, Date)
+      }
+    if(!is.na(tracks_observers)){ #If the function call contains the tracks_observers argument
+      Observateu<-tracks_observers[i]
+      track<-cbind(track, Observateu)
+      }
+    
+    #To keep the name of the original file in the new dataset
+    file_origin=rep(paste(tracks_path, "/", tracks_names[i], sep=""), length=nrow(track))
+    track<-cbind(track, file_origin)
+    
+    if(i==1){tracks_dataset<-track} #Initialisation of tracks_datasets
+    else {tracks_dataset<-rbind(tracks_dataset, track)}
+  }
+  return(tracks_dataset) #Caution : tracks_dataset has no CRS if the tracks in input do not have CRS
+}
+
+
+#Clip a dataset with the study area contour
+datasetCreator=function(polygon, original_dataset, output_dataset="new"){
+  n=nrow(original_dataset)
+  id=(1:n)
+  
+  list_in_study_area<-st_intersects(polygon, original_dataset)
+  #print(list_in_study_area)
+  
+  in_study_area=vector(length=n)
+  original_dataset<-cbind(original_dataset, in_study_area)
+  
+  for(i in (1:n)){
+    for(j in (1:length(list_in_study_area))){
+      if(length(list_in_study_area[[j]])!=0){
+        for(k in (1:length(list_in_study_area[[j]]))){
+          if(id[i]==list_in_study_area[[j]][k]){
+            original_dataset$in_study_area[i]<-"1"
+  }}}}}
+  
+  new_dataset<-subset(original_dataset, original_dataset$in_study_area=="1") #Creation of the subset
+  new_dataset<-subset(new_dataset, select=-in_study_area) #Remove the useless champ column
+  
+  if(output_dataset=="old"){return(original_dataset)} 
+  else {return(new_dataset)}
+}
+
+#Correcting all the data with accents
+crappyAccentsRemover=function(string){
+  string<-as.character(string)
+  
+  if(is.na(string)){return(NA)} #Throwing away the NAs
+  if(string=="\u009cuf"){return("oeuf")}#The function does not work with "œuf"
+  
+  #Definition of the table with accentued letters equivalent
+  crappyAccents_table=matrix(c("À", "à", "â", "Ç",	"ç",	"É", "È", "Ê", "Ë",	"é",	"è",	"ê",	"ë",	"î",	"ï",	"ô",	"œ", "ù", "û", 
+                               "A", "a", "a", "C",	"c",	"E", "E", "E", "E",	"e",	"e",	"e",	"e",	"i",	"i",	"o",	"oe", "u", "u"), ncol=2)
+  colnames(crappyAccents_table)<-c("OriginalLetter", "ModifiedLetter")
+  
+  #Detection of the accents in the string
+  accents_in_string=NULL #Initialisation of the list accents_in_string
+  for (i in 1:nrow(crappyAccents_table)){ #For all the accents in crappyAccents_table
+    if(gregexpr(pattern=crappyAccents_table[i, 1], as.character(string))[[1]][1]>=1){ #Detects if the accent is present in the string
+      accents_in_string=c(accents_in_string, as.character(crappyAccents_table[i, 1])) #Stores the accent in accents_in_string
+    }}
+  
+  if(!is.null(accents_in_string)){ #If there is an accent in the string
+    for (i in 1:length(accents_in_string)){ #Does as many iterations as the number of accents in the string
+      if(i>1){string=corrected_string} #Allows the loop to correct for multiple accents: the corrected_string replaces the string if there are many iterations
+      
+      splitted_string=unlist(strsplit(as.character(string), accents_in_string[i])) #Removes the accent and splits the string according to its position
+      accents_location=unlist(gregexpr(pattern=accents_in_string[i], as.character(string))) #Gets the position of the accent (useful later)
+      corrected_string=""#Initialisation of corrected_string
+      
+      for(j in 1:length(splitted_string)){
+        if(1 %in% accents_location[j]){corrected_string=crappyAccents_table[crappyAccents_table[, 1]==accents_in_string[i], 2]} #If the first letter was an accent
+        else {
+          if(nchar(paste(corrected_string, splitted_string[j], sep=""))==nchar(string)){ #If all the accents have been replaced and the last letter is not an acccent
+            corrected_string=paste(corrected_string, splitted_string[j], sep="")}
+          else {corrected_string=paste(corrected_string, splitted_string[j], crappyAccents_table[crappyAccents_table[, 1]==accents_in_string[i], 2], sep="")}}
+      }}}
+  
+  if(!is.null(accents_in_string)){return(corrected_string)}
+  else {return(string)} #Returns the original string if it hasn't any accent
+}
+```
+
+
+##Definition and correction of study area contours (Champfromier)
+```{r}
+#Importation of all the lidar area contours on the Ain department
+contour_lidar_global_wc<-st_read(file.path(speciespath, "Aire_gestion_CAP_AIN_buffer.shp"))
+contour_lidar_global_wc<-st_transform(contour_lidar_global_wc, 2154)
+if(r_execution_level<2){plot(st_geometry(contour_lidar_global_wc))}
+
+#Extraction of the Champfromier contour
+contour_champ_wc<-contour_lidar_global_wc[contour_lidar_global_wc$OBJECTID=="17",]
+contour_champ_wc<-st_transform(contour_champ_wc, 2154)
+
+if(r_execution_level<2){
+  #plot(st_geometry(contour_champ_wc))
+  st_write(contour_champ_wc, paste(owndatapath, "/", "contour_champ_wc.shp", sep=""))
+  saveRDS(contour_champ_wc, file=paste(owndatapath, "/", "contour_champ_wc.rds", sep=""))
+  
+  contour_champ_c<-projectionCorrection(contour_champ_wc)
+  #st_write(contour_champ_c, paste(owndatapath, "/", "contour_champ_c.shp", sep="")) #This line is desactivated because [SPOILER ALERT: this file will not be used thereafter]
+
+  #Comparison of the corrected and the uncorrected contour
+  leaflet() %>%
+    addTiles() %>%
+    addPolygons(data=st_transform(contour_champ_c, 4326)) %>%
+    addPolygons(data=st_transform(contour_champ_wc, 4326), col = "red")
+}
+
+#After the 14/4/2020 Skype, we decided to work with the uncorrected lidar contour.
+
+leaf<-leaflet() %>% 
+  addTiles() %>%
+  addPolygons(data=st_transform(contour_champ_wc, 4326), col = "orange")
+
+#Cleaning useless variables
+rm(list=c("contour_lidar_global_wc", "contour_champ_c"))
+```
+
+
+##Tracks dataset creation
+###GTJ tracks
+```{r}
+gtjtrackspath <- file.path(gtjdatapath, "gtj_old_tracks")
+
+#Check the projection of each raw file
+if(r_execution_level<2){
+  print(projectionChecker(read_sf(file.path(gtjtrackspath, "2011.shp")), background_map=map[3])) #Seems better when corrected with Satellite view, not sure
+  print(projectionChecker(read_sf(file.path(gtjtrackspath, "2012.shp")), background_map=map[3])) #Seems better when corrected with Satellite view, not sure
+  print(projectionChecker(read_sf(file.path(gtjtrackspath, "2013.shp")), background_map=map[3])) #Seems better when corrected with Satellite view, not sure
+  print(projectionChecker(read_sf(file.path(gtjtrackspath, "2014.shp")), background_map=map[3])) #Obviously better when corrected
+}
+
+#Compilation of all the GTJ data into a single file: gtjtracks_c
+gtjtracks_names<-list.files(gtjtrackspath, pattern=".shp")
+gtjtracks_names<-gtjtracks_names[!str_detect(gtjtracks_names, pattern="xml")]
+gtjtracks_c<-projectionCorrection(tracksMerger(gtjtrackspath, gtjtracks_names))
+
+#Plotting gtjtracks_c
+if(r_execution_level<2){
+  print(leaf %>% addPolylines(data = st_transform(st_geometry(gtjtracks_c), 4326), col = "black"))
+  #st_write(gtjtracks_c, paste(owndatapath, "/", "gtjtracks_c.shp", sep=""))
+}
+
+#Cleaning useless variables
+rm(list=c("gtjtracks_names", "gtjtrackspath"))
+```
+
+###Anouk 2018 data
+####ONCFS tracks
+```{r}
+oncfs2018trackspath <- file.path(anoukdatapath, "anouk_2018_raw_data/track ONCFS champfromier/track ONCFS champfromier")#Setting path to files
+
+#Check the conversion of each file
+if(r_execution_level<2){
+  print(shpConversionChecker(oncfs2018trackspath, "Piste_2018-02-22 NICO", "gpx")) #OK
+  print(shpConversionChecker(oncfs2018trackspath, "Piste_2018-02-23 NICO", "gpx")) #OK
+  print(shpConversionChecker(oncfs2018trackspath, "Piste_2018-02-26 NICO", "gpx")) #OK
+  print(shpConversionChecker(oncfs2018trackspath, "Piste_2018-03-12 NICO", "gpx")) #OK
+  print(shpConversionChecker(oncfs2018trackspath, "Piste_2018-04-06 NICO", "gpx")) #One point removed in the shp to correct an error
+  print(shpConversionChecker(oncfs2018trackspath, "Piste_2018-04-17 NICO", "gpx")) #A track is removed in the shp beacuse it was out of the study area
+  print(shpConversionChecker(oncfs2018trackspath, "Trace Mathieu 2018-02-26-CGP-xYYY-01", "GPX")) #One point removed in the shp to correct an error
+  print(shpConversionChecker(oncfs2018trackspath, "trace Mathieu 2018-02-26-CGP-xYYY-03", "GPX")) #OK
+}
+
+#Getting all files ready
+oncfs2018tracks_names<-list.files(oncfs2018trackspath, pattern=".shp")
+oncfs2018tracks_names<-oncfs2018tracks_names[!str_detect(oncfs2018tracks_names, pattern="génétique")]
+oncfs2018tracks_names<-oncfs2018tracks_names[!str_detect(oncfs2018tracks_names, pattern="génétiqe")]
+oncfs2018tracks_dates<-c('22/02/2018',	'23/02/2018',	'26/02/2018',	'12/03/2018',	'06/04/2018',	'17/04/2018',	'26/02/2018',	'26/02/2018',	'26/02/2018')
+oncfs2018tracks_obser1<-c(rep("Mauron Nicolas", 6), rep("ONCFS Mathieu", 2))
+
+#Compilation of all the ONCFS2018 data into oncfs2018tracks
+oncfs2018tracks<-tracksMerger(oncfs2018trackspath, oncfs2018tracks_names, oncfs2018tracks_dates, oncfs2018tracks_obser1)
+st_crs(oncfs2018tracks)<-27572
+oncfs2018tracks<-st_transform(oncfs2018tracks, 2154)
+
+#Plotting
+if(r_execution_level<2){
+  print(leaf %>% addPolylines(data = st_transform(st_geometry(oncfs2018tracks), 4326), col = "black"))
+  #st_write(oncfs2018tracks, paste(owndatapath, "/", "oncfs2018tracks.shp", sep=""))
+}
+
+#Cleaning useless variables
+rm(list=c("oncfs2018trackspath", "oncfs2018tracks_names", "oncfs2018tracks_dates", "oncfs2018tracks_obser1"))
+```
+
+####GTJ and ONF tracks
+```{r}
+gtjonf2018trackspath <- file.path(anoukdatapath, "anouk_2018_raw_data/traces_GTJ_ONF_2018") #Setting paths to files
+
+#Checking the conversion of all the files isn't possible as the gpx files are not available.
+
+#Getting all files ready
+gtjonf2018tracks_names<-list.files(gtjonf2018trackspath, pattern=".shp")
+gtjonf2018tracks_names<-gtjonf2018tracks_names[!str_detect(gtjonf2018tracks_names, pattern="GENERIQUE")] #These files are observations datasets
+gtjonf2018tracks_names<-gtjonf2018tracks_names[!str_detect(gtjonf2018tracks_names, pattern="Joux")] #These files are located on another mountains
+gtjonf2018tracks_names<-gtjonf2018tracks_names[!str_detect(gtjonf2018tracks_names, pattern="trace 260218 anais")] #This file is located on an another mountain
+gtjonf2018tracks_dates<-c('11/04/2018',	'16/04/2018',	'27/03/2018',	'28/02/2018',	'06/04/2018',	'11/04/2018',	'26/03/2018',	'26/03/2018',	'06/04/2018',	'11/04/2018',	'26/03/2018')
+gtjonf2018tracks_obser1<-c("Béréziat Paul",	rep("Mottet Anais",6), "Depraz Alexandra",	"Depraz Jean-Luc",	"Depraz Jean-Luc",	"Depraz Jean-Luc")
+
+#Compilation of all the GTJONF2018 data into gtjonf2018tracks
+gtjonf2018tracks<-tracksMerger(gtjonf2018trackspath, gtjonf2018tracks_names, gtjonf2018tracks_dates, gtjonf2018tracks_obser1)
+st_crs(gtjonf2018tracks)<-27572
+gtjonf2018tracks<-st_transform(gtjonf2018tracks, 2154)
+
+#Plotting
+if(r_execution_level<2){
+  leaf %>% addPolylines(data = st_transform(st_geometry(gtjonf2018tracks), 4326), col = "black")
+  #st_write(gtjonf2018tracks, paste(owndatapath, "/", "gtjonf2018tracks.shp", sep=""))
+}
+
+#Cleaning useless variables
+rm(list=c("gtjonf2018trackspath", "gtjonf2018tracks_names", "gtjonf2018tracks_dates", "gtjonf2018tracks_obser1"))
+```
+
+####Compilation of the 2018 data
+```{r}
+#Compilation step
+anouk2018tracks<-rbind(oncfs2018tracks, gtjonf2018tracks)
+
+#Plotting
+if(r_execution_level<2){
+  leaf %>% addPolylines(data = st_transform(st_geometry(anouk2018tracks), 4326), col = "black")
+  #st_write(anouk2018tracks, paste(owndatapath, "/", "anouk2018tracks.shp", sep=""))
+}
+
+#Cleaning useless variables
+rm(list=c("oncfs2018tracks", "gtjonf2018tracks"))
+```
+
+###IndividualLines2018_AIN_GESTION.shp
+```{r}
+#Importing iL18 and setting file_origin (a supplementary field that tracks the origin of a track)
+iL18_wc<-tracksMerger(speciespath, "IndividualLines2018_AIN_GESTION.shp")
+st_crs(iL18_wc)<-2154
+
+
+#We need to study each year separately:
+##2009: The tracks unexpectingly correspond to the GTJ tracks:
+iL18_2009_wc<-subset(iL18_wc, Year=="2009")
+st_crs(iL18_2009_wc)<-2154
+iL18_2009_c<-projectionCorrection(iL18_2009_wc)
+
+if(r_execution_level<2){print(leaf %>%
+    addPolylines(data = st_transform(st_geometry(gtjtracks_c), 4326), col = "blue") %>%
+    addPolylines(data = st_transform(st_geometry(iL18_2009_c), 4326), col = "red"))}
+
+##2010:2017
+if(r_execution_level<2){
+  print(projectionChecker(iL18_wc, 2010, map[1])) #Sucessfully corrected
+  #No data on Champfromier for 2011 in individualLines
+  print(projectionChecker(iL18_wc, 2012, map[3])) #Indeed, better
+  print(projectionChecker(iL18_wc, 2013, map[3])) #Seems better
+  print(projectionChecker(iL18_wc, 2014, map[3])) #Seems better
+  #No data on Champfromier for 2015:2017 in individualLines
+}
+  
+##2018: Comparison with anouk2018tracks
+if(r_execution_level<2){print(projectionChecker(iL18_wc, 2018, map[1]))} #No need to reproject
+
+iL18_2018<-subset(iL18_wc, Year=="2018")
+st_crs(iL18_2018)<-2154
+
+if(r_execution_level<2){print(leaf %>%
+  addPolylines(data = st_transform(st_geometry(anouk2018tracks), 4326), col = "blue") %>%
+  addPolylines(data = st_transform(st_geometry(iL18_2018), 4326), col = "red"))}
+###The tracks correspond to each other, but anouk2018 tracks aren't cropped with the the study area contour
+
+
+#Cleaning useless variables
+rm(list=c("iL18_2009_wc", "iL18_2009_c", "iL18_2018"))
+```
+
+###About iL18new
+####Splitting iL18 into iL18_NOTchamp and iL18_champ
+```{r}
+# ==============
+# !!! BEWARE !!!
+# ==============
+#The following correction is applied accross the entire dataset to all the data before 2018, it can be inappropriate:
+iL18_c=rbind(projectionCorrection(subset(iL18_wc, Year<2018)), subset(iL18_wc, Year==2018))
+
+
+#Splitting individualLines in 2 datasets : iL18_NOTchamp_wc will not be modified, and we will work on iL18_champ_wc
+iL18_NOTchamp_c<-subset(
+  subset(
+    datasetCreator(contour_champ_wc, iL18_c, output_dataset="old"), #Dataset cbinded with in_study_area field filled with 1 when the track is on the study area
+    in_study_area!="1"), #Selecting only the tracks that are not on the study area
+  select=-in_study_area) #Removing the in_study_area field
+iL18_champ_c<-datasetCreator(contour_champ_wc, iL18_c)
+
+#Cleaning useless variables
+rm(list=c("iL18_wc", "iL18_c"))
+```
+
+####Creation of iL18new_champ
+```{r}
+#As:
+# - The anouk2018 data corresponds to the 2018 data of individualLines
+# - We don't need the part of the tracks outside the contour_champ_wc because we work with the uncorrected contour
+#But: The 2018 data of individualLines is wrong in the attribute table for some observations (23/02/2018)
+#Then: We will use the anouk2018 data because the attribute table is right.
+
+#For now, we do not know if the data in individualLines in 2009 and in 2018 is wrong or not outside Champfromier.
+#Then: We will use only the data of gtjtracks and anouk2018tracks inside Champfromier.
+
+
+#Clipping the 2 datasets with the Champfromier contour
+gtjtracks_champ_c<-datasetCreator(contour_champ_wc, gtjtracks_c)
+anouk2018tracks_champ<-datasetCreator(contour_champ_wc, anouk2018tracks)
+
+##Plotting
+if(r_execution_level<2){
+  print(leaf %>% addPolylines(data = st_transform(st_geometry(gtjtracks_champ_c), 4326), col = "black"))
+  #st_write(gtjtracks_champ_c, paste(owndatapath, "/", "gtjtracks_champ_c.shp", sep=""))
+
+  print(leaf %>% addPolylines(data = st_transform(st_geometry(anouk2018tracks_champ), 4326), col = "black"))
+  #st_write(anouk2018tracks_champ, paste(owndatapath, "/", "anouk2018tracks_champ.shp", sep=""))
+}
+
+
+#Removing 2009 and 2018 tracks in iL18_champ_wc
+iL18_champ_c<-subset(iL18_champ_c, !(Year %in% c("2009", "2018")))
+
+
+#Preparing supersets to match with the structure of iL18_champ_wc
+superset_gtjtracks_champ_c<-st_sf(data.frame( #Introduction of the formula
+  data.frame(matrix(ncol=2, nrow=nrow(gtjtracks_champ_c))), #2 empty columns
+  data.frame(gtjtracks_champ_c[, c("OBJECTID", "Date_prosp", "NeigeCouve", "NeigeJours", "NeigeQuali", "Length", "temps_parc", "Observateu")])[, -9], #Extracting data and removing the last column (geometry) to prevent duplication of this field in the complete dataset 
+  data.frame(matrix(ncol=16, nrow=nrow(gtjtracks_champ_c))), #16 empty columns
+  data.frame(gtjtracks_champ_c[, "file_origin"]))) #Extracting "file_origin" & "geometry" fields
+
+superset_anouk2018tracks_champ<-st_sf(data.frame( #Introduction of the formula
+  vector(length=nrow(anouk2018tracks_champ)), #1 empty column
+  data.frame(anouk2018tracks_champ[, "ID"])[, -2], #Extracting "ID" field & removing "geometry"
+  vector(length=nrow(anouk2018tracks_champ)), #1 empty column
+  data.frame(anouk2018tracks_champ[, "Date"])[, -2],  #Extracting "Date" field & removing "geometry"
+  data.frame(matrix(ncol=5, nrow=nrow(anouk2018tracks_champ))), #5 empty columns
+  data.frame(anouk2018tracks_champ[, "Observateu"])[, -2], #Extracting "Observateu" field & removing "geometry"
+  data.frame(matrix(ncol=16, nrow=nrow(anouk2018tracks_champ))),#16 empty columns
+  data.frame(anouk2018tracks_champ[, "file_origin"]))) #Extracting "file_origin" & "geometry" fields
+
+colnames(superset_gtjtracks_champ_c)<-colnames(iL18_champ_c)
+colnames(superset_anouk2018tracks_champ)<-colnames(iL18_champ_c)
+
+###Resetting the PROSPID, ID & OBECTID fields of the supersets, as this data does not correspond to the individualLines one
+superset_gtjtracks_champ_c$PROSPID=superset_gtjtracks_champ_c$ID=superset_gtjtracks_champ_c$OBJECTID=rep(NA, nrow(superset_gtjtracks_champ_c))
+superset_anouk2018tracks_champ$PROSPID=superset_anouk2018tracks_champ$ID=superset_anouk2018tracks_champ$OBJECTID=rep(NA, nrow(superset_anouk2018tracks_champ))
+
+##Setting the dates in a format that will support the rbind to come
+iL18_champ_c$Date_prosp<-format(as.Date(iL18_champ_c$Date_prosp, format='%Y/%m/%d'), '%Y%m%d')
+superset_gtjtracks_champ_c$Date_prosp<-format(as.Date(superset_gtjtracks_champ_c$Date_prosp, format='%Y-%m-%d'), '%Y%m%d')
+superset_anouk2018tracks_champ$Date_prosp<-format(as.Date(superset_anouk2018tracks_champ$Date_prosp, format='%Y-%m-%d'), '%Y%m%d')
+
+
+#Compiling all the data into a single file
+##Compiling all the data on Champfromier into a single file
+iL18new_champ<-rbind(iL18_champ_c, superset_gtjtracks_champ_c, superset_anouk2018tracks_champ)
+
+## Completing the dataset
+###Temporal data
+iL18new_champ$Date_prosp=format(as.Date(iL18new_champ$Date_prosp, format='%Y%m%d'), '%Y/%m/%d')
+iL18new_champ$Year=format(as.Date(iL18new_champ$Date_prosp, format='%Y/%m/%d'), '%Y')
+iL18new_champ$Month=format(as.Date(iL18new_champ$Date_prosp, format='%Y/%m/%d'), '%m')
+iL18new_champ$Day=format(as.Date(iL18new_champ$Date_prosp, format='%Y/%m/%d'), '%d')
+iL18new_champ$SAISON=rep("Hivernales", nrow(iL18new_champ))
+
+###Spatial data
+iL18new_champ$Length=iL18new_champ$Longueur=st_length(iL18new_champ)
+iL18new_champ$OBJECTID_2=rep(17, nrow(iL18new_champ))
+iL18new_champ$UN_code=rep(6300122, nrow(iL18new_champ))
+iL18new_champ$Nom=rep("Champfromier - Chalam", nrow(iL18new_champ))
+iL18new_champ$Dept=rep("Ain", nrow(iL18new_champ))
+iL18new_champ$SHAPE_Leng=rep(23815.7114690999, nrow(iL18new_champ))
+iL18new_champ$SHAPE_Area=rep(15488084.5754, nrow(iL18new_champ))
+
+###Correcting "Observateu" field and setting up "ObserNOM" & "DUPL" fields
+observers_correspondance_table=data.frame(c("Rossero, Tournier", "Chesnais, Simon", "Mottet", "Mottet, Cadier", "Mottet, Depraz", 
+                                            "Depraz JL", "Serrette", "Serrette, Depraz", "Depraz A", "Serrete"), 
+                                          c("Rossero Jean-Louis", "Chesnais Maxime", "Mottet Anais", "Mottet Anais", "Mottet Anais", 
+                                            "Depraz Jean-Luc", "Serrette David", "Serrette David", "Depraz Alexandra", "Serrette David"),
+                                          stringsAsFactors=FALSE)
+colnames(observers_correspondance_table)=c("uncorrected_name", "corrected_name")
+
+for(i in (1:nrow(iL18new_champ))){
+  for(j in (1:nrow(observers_correspondance_table))){
+    if(iL18new_champ$Observateu[i]==observers_correspondance_table$uncorrected_name[j]){
+      iL18new_champ$Observateu[i]<-observers_correspondance_table$corrected_name[j]
+  }}
+  temp=unlist(strsplit(iL18new_champ$Observateu[i], " "))[1]
+  iL18new_champ$ObserNOM[i]<-temp
+}
+iL18new_champ$DUPL=paste(iL18new_champ$Date_prosp, iL18new_champ$ObserNOM)
+
+##Plotting and writing the complete iL18new_champ dataset
+if(r_execution_level<2){
+  print(leaf %>% addPolylines(data = st_transform(st_geometry(iL18new_champ), 4326), col = "black"))
+  #st_write(iL18new_champ, paste(owndatapath, "/", "iL18new_champ.shp", sep=""))
+}
+
+
+#Cleaning useless variables
+rm(list=c("iL18_champ_c",
+          "gtjtracks_c", "anouk2018tracks", "gtjtracks_champ_c", "anouk2018tracks_champ", 
+          "superset_gtjtracks_champ_c", "superset_anouk2018tracks_champ", 
+          "observers_correspondance_table", "temp"))
+```
+
+####Creation of iL18new
+```{r}
+#Creating IndividualLines2018_new_AIN_GESTION.shp
+iL18new<-rbind(iL18_NOTchamp_c, iL18new_champ)
+
+
+#Correcting iL18new attribute table
+iL18new$new_id=seq(1, nrow(iL18new), 1) #Resets unique identifiers
+iL18new$PROSPID=rep(NA, nrow(iL18new)) #Resets PROSPID
+iL18new$Length=iL18new$Longueur=st_length(iL18new) #Recalculates Length and Longueur fields
+
+##Transformation of all the chr and num fields into factor fields to use levels replacements further
+for (j in colnames(iL18new)[colnames(iL18new)!="geometry"]){iL18new[, j]=as.factor(data.frame(iL18new[, j])[, -2])}
+
+##Correction of iL18new$NeigeQuali
+levels(iL18new$NeigeQuali)[levels(iL18new$NeigeQuali)=="Mauvaise"]<-"mauvaise"
+levels(iL18new$NeigeQuali)[levels(iL18new$NeigeQuali)=="mauvaise,"]<-"mauvaise"
+levels(iL18new$NeigeQuali)[levels(iL18new$NeigeQuali)=="mauvaise, neige gele"]<-"mauvaise, neige gelee"
+levels(iL18new$NeigeQuali)[levels(iL18new$NeigeQuali)=="mauvaise, pluie le jour avant, puis gella nuit"]<-"mauvaise, pluie le jour avant, puis gel la nuit"
+levels(iL18new$NeigeQuali)[levels(iL18new$NeigeQuali)=="moyen"]<-"moyenne"
+levels(iL18new$NeigeQuali)[levels(iL18new$NeigeQuali)=="moyenn"]<-"moyenne"
+levels(iL18new$NeigeQuali)[levels(iL18new$NeigeQuali)=="moyenne fondante"]<-"moyenne, fondante"
+levels(iL18new$NeigeQuali)[levels(iL18new$NeigeQuali)=="moyenne, neige surcie sous les arbres"]<-"moyenne, neige durcie sous les arbres"
+
+
+#Plotting and writing iL18new
+if(r_execution_level<2){
+  leaf %>% addPolylines(data = st_transform(st_geometry(iL18new), 4326), col = "black")
+  st_write(iL18new, paste(owndatapath, "/", "IndividualLines2018_new_AIN_GESTION.shp", sep=""))
+  saveRDS(iL18new, paste(owndatapath, "/", "IndividualLines2018_new_AIN_GESTION.rds", sep=""))
+}
+
+
+#Cleaning useless variables
+rm("iL18_NOTchamp_c", "iL18new_champ")
+```
+
+###Identification of the problems of iL18new
+```{r}
+#Exposing the problems
+##1: Tracks are randomly cut on some edges. Thic causes the association of the tracks and the points to be more difficult.
+subset_tracks=subset(iL18new, iL18new$DUPL=="2014/04/10 Simon")
+pal=rep(brewer.pal(n=8, name="Set2"), ceiling(length(subset_tracks$DUPL)/8))[1:length(subset_tracks$DUPL)] #Setting the list of colors
+print(leaf %>%
+  addProviderTiles(providers$CartoDB.Positron) %>% #Gray background map to highlight the tracks (in color)
+  addPolylines(data=st_transform(subset(iL18new, iL18new$DUPL=="2014/04/10 Simon"), 4326), col=pal) %>%
+  addLabelOnlyMarkers(data=st_transform(st_centroid(subset(iL18new, iL18new$DUPL=="2014/04/10 Simon")), 4326), label=paste("new_id :", subset_tracks$new_id), labelOptions=labelOptions(style=list(color='black'), noHide=TRUE, textOnly=TRUE)) %>%
+  fitBounds(lng1 = 5.941623637389043, lat1 = 46.28000190082264, lng2 = 5.943868350828246, lat2 = 46.281345108730534))
+#Each of the segments is a track in itself, while it should have been assembled in 2 or 4 tracks only.
+
+##2: Wrong info in the attribute table for the observers and for the dates:
+print(leaf %>%
+  addProviderTiles(providers$CartoDB.Positron) %>% #Gray background map to highlight the tracks (in color)
+  addPolylines(data=st_transform(subset(iL18new, iL18new$DUPL=="2014/04/10 Simon"), 4326), col='blue') %>%
+  addLabelOnlyMarkers(data=st_transform(st_centroid(subset(iL18new, iL18new$DUPL=="2014/04/10 Simon")), 4326), label="2014/04/10 Simon", 
+                        labelOptions=labelOptions(style=list(color='blue'), noHide=TRUE, textOnly=TRUE)))
+###A total of 16586km of length on 255 tracks for Jean-Luc Simon the 2014/04/10, the performance is quite impressive! (Maybe he drank a very strong coffee which gave him strengh after all...)  And all that effort to provide... 0 points on that day (!) and only 25 points in that year (that aren't even close to one of the 255 tracks!)!
+
+#3: Wrong info in the attribute table for some observers (Guichard shouldn't be in the iL_AIN dataset because he is an ONCFS agent in the Doubs department and did not particpated in propsections in another department)
+print(leaf %>%
+  addProviderTiles(providers$CartoDB.Positron) %>% #Gray background map to highlight the tracks (in color)
+  addPolylines(data=st_transform(subset(iL18new, iL18new$DUPL=="2009/01/13 Guinchard"), 4326), col='blue') %>%
+  addLabelOnlyMarkers(data=st_transform(st_centroid(subset(iL18new, iL18new$DUPL=="2009/01/13 Guinchard")), 4326), label="2009/01/13 Guinchard", 
+                        labelOptions=labelOptions(style=list(color='blue'), noHide=TRUE, textOnly=TRUE)))
+###And don't even look at this level on the iL_JURA dataset, you will discover that there is the second problem (##2) on this day with this observer!
+
+
+#Cleaning useless variables
+rm(list=c("subset_tracks", "pal"))
+```
+
+####Correction of iL18new
+```{r}
+# ==============
+# !!! BEWARE !!!
+# ==============
+# The work in this chunk isn't completed. Its aim is to ather part of the tracks that are segmented into smaller tracks (problem #1 described the pevious chunk). The job is stopped when 2 tracks are combined into one. The resulting track has a crappy attribute table, which has to be cleaned by deleting duplicated info and compiled when the 2 correcponding fields haven't the same value (which are ID, Length and new_id fields).
+
+# #Compilation of the data
+# factorsMerger=function(first_factor, second_factor){ #This function is set to work with only one row at a time
+#   if("sf" %in% class(first_factor) | "sf" %in% class(second_factor)){
+#     first_factor=data.frame(first_factor)[, -2]
+#     second_factor=data.frame(second_factor)[, -2]}
+#   
+#   print(paste("first :", first_factor))
+#   print(paste("second :", second_factor))
+#   
+#   if(!is.na(first_factor)){
+#     first_factor=as.character(first_factor)
+#     second_factor=as.character(second_factor)
+#   
+#     merged_factor<-c(first_factor, second_factor)
+#   } else {merged_factor=NA}
+#   return(merged_factor)
+# }
+# 
+# 
+# levels=levels(as.factor(iL18new$DUPL))
+# for(i in 26:26){ #nrow(levels)
+#   subset_tracks=subset(iL18new, iL18new$DUPL==levels[i])#Selecting only the tracks with the same level of iL18new$DUPL
+#   
+#   #Plots
+#   ##Tracks are grouped by level of iL18new$DUPL
+#   pal=brewer.pal(n=8, name="Set2")[1:length(unique(subset_tracks$DUPL))] #Setting the list of colors
+#   print(leaf %>%
+#     addProviderTiles(providers$CartoDB.Positron) %>% #Gray background map to highlight the tracks (in color)
+#     addPolylines(data=st_transform(subset_tracks, 4326), col=pal) %>%
+#     addLabelOnlyMarkers(data=st_transform(st_centroid(subset_tracks), 4326), label=subset_tracks$DUPL, 
+#                         labelOptions=labelOptions(style=list(color=pal), noHide=TRUE, textOnly=TRUE)))
+#   
+#   ##Each track has an unique color
+#   # pal=rep(brewer.pal(n=8, name="Set2"), ceiling(length(subset_tracks$DUPL)/8))[1:length(subset_tracks$DUPL)] #Setting the list of colors
+#   # print(leaf %>%
+#   #   addProviderTiles(providers$CartoDB.Positron) %>% #Gray background map to highlight the tracks (in color)
+#   #   addPolylines(data=st_transform(subset_tracks, 4326), col=pal) %>%
+#   #   addLabelOnlyMarkers(data=st_transform(st_centroid(subset_tracks), 4326), label=paste("j=", 1:length(subset_tracks$DUPL), sep=""), 
+#   #                       labelOptions=labelOptions(style=list(color=pal), noHide=TRUE, textOnly=TRUE)))
+#   
+#   if(nrow(subset_tracks)>1){ #If we really need to gather tracks
+#     
+#     #Initialisation of the useful_points table, which is useful to collect the first and the last point of each track
+#     useful_points=data.frame(matrix(NA, ncol=4))
+#     colnames(useful_points)<-c("iL18new_new_id", "pointStatus", "x", "y")
+#     
+#     for(j in 1:nrow(subset_tracks)){print(paste("j =", j)) #For each track:
+#       track=subset_tracks[j, "geometry"][[1]] #Get the track coordinates
+#       track_new_id=as.character(subset_tracks[j, "new_id"])[1] #Get the track unique identifier: iL18new$new_id
+#       
+#       #plot(st_geometry(track), main=paste("DUPL =", as.character(subset_tracks[j, "DUPL"][[1]]), "// j =", j))
+#       
+#       duplicate_safeguard=1 #This variable is only here to prevent the if(k==1) condition to be done twice if there is only one segment in the track (and hence for the k loop to get 2 first points instead of one first point and one last point).
+#       for (k in c(1,length(track[[1]]))){print(paste("k =", k)) #For the first and the last segment of each track:
+#         segment=track[[1]][[k]] #Get the segment
+#         #plot(st_linestring(segment), main=paste("k =", k), add=TRUE)
+#         
+#         if(k==1 & duplicate_safeguard==1){
+#           first_point=segment[1, ]
+#           #print(paste("first_point :", first_point))
+#           } #Get coordinates of the first point of the first segment
+#         else {
+#           last_point=segment[nrow(segment), ]
+#           #print(paste("last_point :", last_point))
+#           } #Get coordinates of the last point of the last segment
+#         
+#         # plot(st_geometry(st_point(first_point)), col='red', type='p', add=TRUE)
+#         # plot(st_geometry(st_point(last_point)), col='green', type='p', add=TRUE)
+#         
+#         duplicate_safeguard=2
+#       }
+#       
+#       #Gathering first and last point into useful_points
+#       useful_points=rbind(useful_points, 
+#                           c(track_new_id, "first", as.numeric(first_point[1]), as.numeric(first_point[2])), 
+#                           c(track_new_id, "last", as.numeric(last_point[1]), as.numeric(last_point[2])))
+#       
+#       if(j==1){useful_points=useful_points[-1, ]} #Removes the first line of useful_points filled with NAs
+#     }
+#     
+#     #Creating a geometry column for useful_points
+#     geometry=vector(length=nrow(useful_points))
+#     for (i in 1:nrow(useful_points)){geometry[i]=st_geometry(st_point(as.numeric(useful_points[i, c("x", "y")])))}
+#     geometry=st_sfc(geometry)
+#     useful_points=cbind(useful_points, geometry)
+#     useful_points=st_as_sf(useful_points)
+#     
+#     first_points=subset(useful_points, useful_points$pointStatus=="first")
+#     st_crs(first_points)<-2154
+#     last_points=subset(useful_points, useful_points$pointStatus=="last")
+#     st_crs(last_points)<-2154
+#     
+#     pal=rep(brewer.pal(n=8, name="Set2"), ceiling(length(subset_tracks$DUPL)/8))[1:length(subset_tracks$DUPL)] #Setting the list of colors
+#     print(leaf %>%
+#       addProviderTiles(providers$CartoDB.Positron) %>% #Gray background map to highlight the tracks (in color)
+#       addPolylines(data=st_transform(subset_tracks, 4326), col=pal) %>%
+#       addLabelOnlyMarkers(data=st_transform(st_centroid(subset_tracks), 4326), label=paste("j=", 1:length(subset_tracks$DUPL), sep=""),
+#                           labelOptions=labelOptions(style=list(color=pal), noHide=TRUE, textOnly=TRUE)) %>%
+#       addCircles(data=st_transform(first_points, 4326), col='green', stroke=FALSE, fillOpacity=1) %>%
+#       addCircles(data=st_transform(last_points, 4326), col='red', stroke = FALSE, fillOpacity=1))
+#     
+#     
+#     #Distance matrix initialisation
+#     distance_matrix=data.frame(matrix(NA, nrow=nrow(useful_points), ncol=nrow(useful_points)))
+#     rownames(distance_matrix)<-rep(paste(rep(unique(useful_points$iL18new_new_id), each=2), 
+#                                          rep(c("_first", "_last"), times=nrow(useful_points)/2), 
+#                                          sep=""))
+#     colnames(distance_matrix)<-rep(paste(rep(unique(useful_points$iL18new_new_id), each=2), 
+#                                          rep(c("_first", "_last"), times=nrow(useful_points)/2), 
+#                                          sep=""))
+#     
+#     distance_threshold=200
+#     tracks_to_merge=matrix(ncol=2)
+#     for(l in 1:ncol(distance_matrix)){
+#       for(m in 1:nrow(distance_matrix)){
+#         if(m>=(l-1)){next} else{distance_matrix[m, l]<-st_distance(useful_points[m, ], useful_points[l, ])}
+#         if(distance_matrix[m, l]<distance_threshold){
+#           tracks_to_merge=rbind(tracks_to_merge, c(rownames(distance_matrix)[m], colnames(distance_matrix)[l]))
+#         }
+#       }
+#     }
+#     #tracks_to_merge=tracks_to_merge[-1, ]
+#     
+#     if(nrow(tracks_to_merge)>1){
+#       temp=iL18new
+#       
+#       for(n in 2:nrow(tracks_to_merge)){
+#         tracks_to_assemble=rbind(temp[temp$new_id==strsplit(tracks_to_merge[n, 1], "_")[[1]][1], ],
+#                                  temp[temp$new_id==strsplit(tracks_to_merge[n, 2], "_")[[1]][1], ])
+#         #plot(tracks_to_assemble)
+#         
+#         tracks_to_assemble=st_union(tracks_to_assemble[1, ], tracks_to_assemble[2, ])
+#         #plot(tracks_to_assemble)
+# 
+#         columns_to_merge=matrix(c("PROSPID", "ID", "OBJECTID", "Date_prosp", "NeigeCouve", "NeigeJours", "NeigeQuali", "Length", "temps_parc", "Observateu", "Longueur", "DUPL", "Twice", "ObserNOM", "Year", "Month", "Day", "SAISON", "DULP", "OBJECTID_2", "UN_code", "Nom", "Dept", "SHAPE_Leng", "SHAPE_Area", "ID_2", "file_origin", "new_id",
+#                                   "PROSPID.1", "ID.1", "OBJECTID.1", "Date_prosp.1", "NeigeCouve.1", "NeigeJours.1", "NeigeQuali.1",  "Length.1", "temps_parc.1", "Observateu.1", "Longueur.1", "DUPL.1", "Twice.1", "ObserNOM.1", "Year.1", "Month.1", "Day.1", "SAISON.1", "DULP.1", "OBJECTID_2.1", "UN_code.1", "Nom.1", "Dept.1", "SHAPE_Leng.1", "SHAPE_Area.1", "ID_2.1", "file_origin.1", "new_id.1"), ncol=2)
+#         colnames(columns_to_merge)=list(paste("Info", tracks_to_merge[n, 1], sep=""), paste("Info", tracks_to_merge[n, 2], sep=""))
+# 
+#         for(o in 1:5){ #nrow(columns_to_merge)
+#           #if(!is.na(columnsMerger(tracks_to_assemble[, columns_to_merge[o, 1]], tracks_to_assemble[, columns_to_merge[o, 2]]))){
+#             #print("1")
+#           print(paste("Résultat :", factorsMerger(tracks_to_assemble[, columns_to_merge[o, 1]], tracks_to_assemble[, columns_to_merge[o, 2]])))
+#           tracks_to_assemble[1, columns_to_merge[o, 1]]<-factorsMerger(tracks_to_assemble[, columns_to_merge[o, 1]],
+#                                                                        tracks_to_assemble[, columns_to_merge[o, 2]])}
+#         #}
+#       }
+#     }
+#     
+#   } else {next}
+# }
+
+# #Decomposing factorsMerger() for debugging purposes
+# first_factor=tracks_to_assemble[, columns_to_merge[o, 1]]
+# second_factor=tracks_to_assemble[, columns_to_merge[o, 2]]
+# 
+# if("sf" %in% class(first_factor) | "sf" %in% class(second_factor)){
+#   first_factor=data.frame(first_factor)[, -2]
+#   second_factor=data.frame(second_factor)[, -2]}
+# 
+# if(!is.na(first_factor)){
+#   first_factor=as.character(first_factor)
+#   second_factor=as.character(second_factor)
+# 
+#   merged_factor<-c(first_factor, second_factor)
+# } else {
+#     merged_factor=NA
+# }
+```
+
+
+
+##Observations dataset creation
+###Thesis observation dataset
+```{r}
+#Thesis dataset
+##Projection check
+#projectionChecker(st_read(file.path(speciespath, "OBSGDTtot2018.shp")), background_map = map[1])
+#With the help of tracks_dataset, it appears that the 2014 and 2018 data need correction.
+
+##Importation and correction
+# ==============
+# !!! BEWARE !!!
+# ==============
+#The following correction is applied accross the entire dataset to all the data, even the 2018 one, it can be inappropriate:
+obs_thesis_c<-projectionCorrection(st_read(file.path(speciespath, "OBSGDTtot2018.shp")))
+if(r_execution_level<2){leaf %>% addCircles(data = st_transform(st_geometry(obs_thesis_c), 4326), col = "black")} #Plot
+
+#Application of different corrections to fit with the GTJ observations dataset structure
+##"Sexe"
+for(i in c("sexe ind?termin?", "sexe indÃ©terminÃ©", "sexe indéterminé", "sexe indtermin")){levels(obs_thesis_c$Sexe)[levels(obs_thesis_c$Sexe)==i]<-"indetermine"}
+levels(obs_thesis_c$Sexe)[levels(obs_thesis_c$Sexe)=="male"]<-"coq"
+
+##"Date"
+obs_thesis_c$Date=format(as.Date(paste(obs_thesis_c$Year, obs_thesis_c$Month, obs_thesis_c$Day, sep="/"), format='%Y/%m/%d'), '%Y/%m/%d')
+
+##"TypeObs1"
+temp=matrix(c("crottes", "crottes sous sapin", "crotte sous perchoir", "levÃ© perchÃ©", "levÃ© sol", "plumes", 
+              "crotte", "crotte sous sapin", "crotte sous sapin", "leve perche", "leve sol", "plume"), ncol=2)
+for(i in 1:length(temp[, 1])){levels(obs_thesis_c$TypeObs1)[levels(obs_thesis_c$TypeObs1)==temp[i, 1]]<-temp[i, 2]}
+
+##"Saison"
+levels(obs_thesis_c$Saison)[levels(obs_thesis_c$Saison)=="t"]<-"ete"
+
+##"REPRO"
+for(i in c("niche", "nichÃ©e")){levels(obs_thesis_c$REPRO)[levels(obs_thesis_c$REPRO)==i]<-"nichee"}
+levels(obs_thesis_c$REPRO)[levels(obs_thesis_c$REPRO)=="0"]<-"non"
+
+##"Precisn"
+levels(obs_thesis_c$Precisn)[levels(obs_thesis_c$Precisn)=="GPS"]<-"gps"
+levels(obs_thesis_c$Precisn)[levels(obs_thesis_c$Precisn)=="lieudit"]<-"lieu-dit"
+levels(obs_thesis_c$Precisn)[is.na(levels(obs_thesis_c$Precisn))]<-"non renseigne"
+
+##"DPT"
+levels(obs_thesis_c$DPT)[levels(obs_thesis_c$DPT)=="Ain"]<-"ain"
+levels(obs_thesis_c$DPT)[levels(obs_thesis_c$DPT)=="Doubs"]<-"doubs"
+levels(obs_thesis_c$DPT)[levels(obs_thesis_c$DPT)=="Jura"]<-"jura"
+
+##"OBSER1"
+incorrectOBSER1_table=matrix(c("2165099\n2165294\n2164868\nSerrette David", "ADEPRAZ",	"Amaury Troppe",	"andrey", "Andrey",	"Audy",	"B LADET",	"Bailly M",	"Bailly-Basin Herv",	"Bailly-Maitre Franois",	"Bailly-Matre Franois",	"Bajard E.",	"barthelemy", "Barthelemy",	"Berard",	"Berger L.",	"Besnier Alexandra",	"Besset C",	"besset Christian",	"Bgrand",	"Blondet",	"Bombois Jrme",	"Bornarel",	"bourlier",	"Brigatti Jrome",	"Brocard",	"Brulhart E",	"Bucheron",	"Béréziat",	"C BESSET",	"catherine",	"Caton",	"Chambard B",	"Chanal",	"chasseur", "Chasseur",	"chasseurs",	"Chion Franois",	"Choelet Jrmie",	"Cholet Jrmie",	"Chollet Jrmie",	"Christian",	"Claude Pascale",	"Coche Grard",	"Conche",	"Conrard",	"Corcelle",	"Corcelle Franois",	"Corcelles",	"cr", "Cretin P",	"Damperon S.",	"Depraz Alexndra",	"Devillers",	"devillers", "devlillers",	"Dommergue",	"Duraffour Bernard",	"Dussoulliez Severine",	"Equenot J.",	"ESF",	"Farey",	"Fevrier",	"Fiorentini Richard",	"Fischer Patrce",	"Fisher",	"G ROCHE",	"Gaudy Andr",	"Golay",	"Grand G.",	"Grard Maurice",	"Grenier C",	"Grollier G",	"Grossen",	"Grossen M",	"Henriet B.",	"Jacquemin",	"Janet L",	"Janier",	"Jean Luc SIMON",	"JLDepraz",	"Joachy",	"Karczewski G",	"Kolly",	"Lambey", "Lamy-Quique",	"Lhomme J",	"Lhomme2 Jean-Franois",	"Liardon",	"Ligas Jean-Franois",	"Louiton Franois",	"Magnon Genevie",	"Malgouvern Alexandre",	"Mallejac",	"Marcello",	"Marquer",	"Marusi",	"Massonet",	"Mathieu",	"Mermet S",	"Michel P",	"Mottet",	"Mottet AnaÃ¯s",	"Nove",	"OGLIOTTI JC",	"ONF",	"ONF01",	"ONF39",	"ONF9",	"P SALVI",	"Pablo",	"Paris Jean Luc",	"Perrier",	"Petetin",	"Petite",	"pisteur",	"PNR",	"Poiblanc P",	"Pouly B",	"Ppin Didier",	"Prost Jean-Franois",	"Prunier",	"Quelin",	"Rambour",	"Regazzoni Stphane",	"RNHC",	"RNHCJ",	"Rou Sebastien",	"Ruche",	"Saget",	"Saget Gaby",	"Sassard Frderic",	"SD39",	"Sibut", "Simon Jean Luc",	"Taramino",	"Tartavel",	"Thibaud Jean-Luc",	"Tissot P",	"Tournier Herv",	"Troppe Amaury",	"Veillet Jean-Franois",	"Vigoureux Herv",	"Vincent Kvin",	"Vionnet Grard",	"Vuaillet", "Vuillet Florian",	"Zambon",
+                               "Serrette David",	"Depraz Alexandra",	"Troppe Amaury",	"non renseigne", "non renseigne",	"Audy Jean-Louis",	"non renseigne",	"Bailly-maitre Francois",	"Bailly-Basin Herve",	"Bailly-maitre Francois",	"Bailly-maitre Francois",	"Bajard Eric",	"non renseigne",	"non renseigne",	"non renseigne",	"non renseigne",	"Depraz Alexandra",	"Besset Christian", "Besset Christian",	"non renseigne",	"Blondet Alain",	"Bombois Jeremy",	"non renseigne",	"non renseigne",	"Brigatti Jerome",	"Brocard Daniel",	"Brulhart Emmanuelle",	"non renseigne",	"Bereziat Paul",	"Besset Christian",	"non renseigne",	"non renseigne",	"non renseigne",	"Chanal Francois",	"Chasseur",	"non renseigne",	"Chasseur",	"Chion Francois",	"Chollet Jeremie",	"Chollet Jeremie",	"Chollet Jeremie",	"non renseigne",	"Claude Pascal",	"Coche Gerard",	"Coche Gerard",	"non renseigne",	"Corcelle Francois",	"Corcelle Francois",	"non renseigne", "non renseigne",	"non renseigne",	"non renseigne",	"Depraz Alexandra",	"Devillers Dominique",	"Devillers Dominique",	"Devillers Dominique",	"Domergue Olivier",	"Duraffourg Bernard",	"Dussouillez Severine",	"non renseigne",	"non renseigne",	"non renseigne",	"Fevrier Nicolas",	"Fiorentin Richard",	"Fischer Patrice",	"Fischer Patrice",	"non renseigne",	"Gaudy Andre",	"Chasseur",	"non renseigne",	"Gerard Maurice",	"non renseigne",	"non renseigne",	"non renseigne",	"non renseigne",	"Henriet Bruno",	"non renseigne",	"non renseigne",	"non renseigne",	"Simon Jean-Luc",	"Depraz Jean-Luc",	"non renseigne",	"non renseigne",	"non renseigne",	"Lambey Daniel",	"non renseigne",	"Lhomme Jean-Francois",	"Lhomme Jean-Francois",	"non renseigne",	"Ligas Jean-Francois",	"Louiton Francois",	"Magnon Genevieve",	"Malgouverne Alexandre",	"non renseigne",	"non renseigne",	"non renseigne",	"non renseigne",	"non renseigne",	"non renseigne",	"Mermet Serge",	"non renseigne",	"Mottet Anais",	"Mottet Anais",	"non renseigne",	"non renseigne",	"ONF 39",	"ONF 01",	"ONF 39",	"ONF 39",	"non renseigne",	"RNNHCJ",	"Paris Jean-Luc",	"non renseigne",	"non renseigne",	"Petit Thierry",	"Pisteur",	"PNR 39",	"Poiblanc Pascal",	"non renseigne",	"Pepin Didier",	"Prost Jean-Francois",	"non renseigne",	"non renseigne",	"non renseigne",	"Regazzoni Stephane",	"RNNHCJ",	"Chasseur",	"Roue Sebastien",	"non renseigne",	"Saget Gabriel",	"Saget Gabriel",	"Sassard Frederic",	"Chesnais Maxime",	"non renseigne",  "Simon Jean-Luc",	"non renseigne",	"non renseigne",	"Thiebaud Jean-Luc",	"non renseigne",	"Tournier Herve",	"Troppee Amaury",	"Veillet Jean-Francois",	"Vigoureux Herve",	"Vincent Kevin",	"Vionnet Gerard",	"Vuillet Florian", 	"non renseigne",	"Zambon Julien"), ncol=2)
+colnames(incorrectOBSER1_table)<-c("AlteredName", "CorrectName")
+
+for(i in levels(data.frame(obs_thesis_c$OBSER1)[, -2])){
+  for(j in 1:length(incorrectOBSER1_table[, 1])){
+    k=incorrectOBSER1_table[j, 1]
+    if(i==k){levels(obs_thesis_c$OBSER1)[levels(obs_thesis_c$OBSER1)==k]<-incorrectOBSER1_table[j, 2]}
+}}
+
+for(i in 1:(nrow(obs_thesis_c))){if(is.na(obs_thesis_c$OBSER1[i])){obs_thesis_c$OBSER1[i]="non renseigne"}}
+
+##"Obser1NOM" & "Obs1NOM"
+temp=list()
+for(i in 1:(nrow(obs_thesis_c))){
+  if(obs_thesis_c$OBSER1[i]!="non renseigne"){temp=rbind(temp, unlist(strsplit(as.character(obs_thesis_c$OBSER1[i]), " "))[1])}
+  else {temp=rbind(temp, "")}
+}
+obs_thesis_c$Obser1NOM<-as.factor(as.character(temp))
+obs_thesis_c$Obs1NOM<-obs_thesis_c$Obser1NOM
+
+##"ID"
+obs_thesis_c$ID=paste(obs_thesis_c$Date, obs_thesis_c$Obser1NOM)
+
+##"PROSPSA"
+levels(obs_thesis_c$PROSPSA)[levels(obs_thesis_c$PROSPSA)=="NA"]<-""
+levels(obs_thesis_c$PROSPSA)[levels(obs_thesis_c$PROSPSA)=="Hivernales"]<-"prospection hivernale"
+levels(obs_thesis_c$PROSPSA)[levels(obs_thesis_c$PROSPSA)=="Estivales"]<-"prospection estivale"
+
+##"PRTCL"
+levels(obs_thesis_c$PRTCL)[levels(obs_thesis_c$PRTCL)=="BATTUE"]<-"non renseigne" #Loss of information here
+levels(obs_thesis_c$PRTCL)[levels(obs_thesis_c$PRTCL)=="NA"]<-"non renseigne"
+levels(obs_thesis_c$PRTCL)[levels(obs_thesis_c$PRTCL)=="PROSPECTION"]<-""
+obs_thesis_c$PRTCL<-paste(obs_thesis_c$PRTCL, obs_thesis_c$PROSPSA, sep="")
+
+##"TypeObs1"
+temp=matrix(c("crottes", "crottes sous sapin", "crotte sous perchoir", "levÃ© perchÃ©", "levÃ© sol", "plumes", 
+              "crotte", "crotte sous sapin", "crotte sous sapin", "leve perche", "leve sol", "plume"), ncol=2)
+for(i in 1:length(temp[, 1])){levels(obs_thesis_c$TypeObs1)[levels(obs_thesis_c$TypeObs1)==temp[i, 1]]<-temp[i, 2]}
+
+##"TypObs1"
+temp=matrix(c("crottes", "crottes sous sapin", "crottule et traces", "crottules sur neige et traces", "lev indtermin", "lev perch", "lev sol", "leve", "levé", "non prcis", "perchoir h?tre diam?tre 25cm", "perchoir h?tre diam?tre 35cm", "perchoir h?tre diam?tre 40cm", "perchoirs", "plumes", "sapin diam?tre 15cm", "sapin diam?tre 40cm, crottes d?chiquet?es et lessiv?es", "sapin diam?tre 60cm", "trace d'1 ind", "trace du jour", "traces", "traces, avec celles d?un coq", "vieille crotte sur souche", "vieille crotte sur souche (d?but hiver?)", "vieilles crottes sur souche",
+              "crotte", "crotte sous sapin", "crotte", "crotte", "leve indetermine", "leve perche", "leve sol", "leve indetermine", "leve indertermine", "non renseigne", "perchoir", "perchoir", "perchoir", "perchoir", "plume", "crotte sous sapin", "crotte sous sapin", "crotte sous sapin", "trace", "trace", "trace", "trace", "crotte", "crotte", "crotte"), ncol=2)
+for(i in 1:length(temp[, 1])){levels(obs_thesis_c$TypObs1)[levels(obs_thesis_c$TypObs1)==temp[i, 1]]<-temp[i, 2]}
+
+##Completing "TypeObs1"
+temp=as.character(obs_thesis_c$TypeObs1)
+temp2=as.character(obs_thesis_c$TypObs1)
+for (i in 1:length(temp)){if(!is.na(obs_thesis_c$TypObs1[i])){temp[i]<-temp2[i]}}
+obs_thesis_c$TypeObs1=as.factor(temp)
+
+##"TypObs2"
+temp=matrix(c("crottes", "crottes sous sapin", "lev perch", "lev sol", "plumes", 
+              "crotte", "crotte sous sapin", "leve perche", "leve sol", "plume"), ncol=2)
+for(i in 1:length(temp[, 1])){levels(obs_thesis_c$TypObs2)[levels(obs_thesis_c$TypObs2)==temp[i, 1]]<-temp[i, 2]}
+
+##Completing "TypeObs2"
+obs_thesis_c$TypeObs2=obs_thesis_c$TypObs2
+
+
+## SUMMARY:
+# - "NumObs": Altered field, to be corrected later in the script
+# - "ID":  Recreated from "Date" and "Obser1NOM"
+# - "Sexe": Corrected (some problems with accents & standardisation)
+# - "Date": Corrected (problem of format)
+# - "TypeObs1": Corrected (some problems with accents & standardisation) & completed
+# - "TypeObs2": Copied from TypObs2
+# - "TypeObs3": Empty field
+# - "Saison": Corrected (problem with "t" for "ete")
+# - "NbVu": No need for correction
+# - "REPRO": Corrected (problem with accents for "nichee")
+# - "CMT": NOT corrected
+# - "Precisn": Corrected (standardisation)
+# - "TC", "LD", "PF" & "PARCELL": NOT corrected (not understood)
+# - "DPT": Corrected (problem with capital letters)
+# - "UNCode": No need for correction
+# - "OBSER1": Corrected (many problems & standardisation)
+# - "OBSER2", "OBSER3" & "OBSER4": NOT corrected
+# - "Year", "Month" & "Day": No need for correction
+# - "Obser1NOM": Recreated from "OBSER1"
+# - "PROSPID": NOT corrected
+# - "PRTCL": Corrected (standardisation)
+# - "PROSPSA": Corrected (standardisation)
+# - "distance": NOT corrected
+# - "Nb_Obser": NOT corrected
+# - "TypObs1" & "TypObs2": Corrected (many problems & standardisation)
+# - "TypObs3": Empty field
+# - "coords_x1" & "coords_x2": No need for correction
+# - "Obs1NOM": Copied from "Obser1NOM"
+# - "Obs1Nom_1": Empty field
+# - "geometry": No need for correction
+
+
+#Cleaning useless variables
+rm(list=c("incorrectOBSER1_table", "temp", "temp2"))
+```
+
+####Correcting wrong data on Champfromier
+```{r}
+#Datasets creation
+obs_thesis_champ_c<-datasetCreator(contour_champ_wc, obs_thesis_c)
+if(r_execution_level<2){leaf %>% addCircles(data = st_transform(st_geometry(obs_thesis_champ_c), 4326), col = "black")} #Plot
+
+##Creation of a temporary uncorrected obs_gtj dataset
+obs_gtj<-st_read(file.path(gtjdatapath, "/gtj_datasets/Grand tetras.shp"), options="ENCODING=latin1")
+st_crs(obs_gtj)<-2154
+obs_gtj_champ<-datasetCreator(contour_champ_wc, obs_gtj)
+
+
+#Identifying points that differ between subsets
+#The buffers should be set to "9" to correspond with my manual search of single points.
+single_points_thesis=subset(datasetCreator(st_buffer(obs_gtj_champ, 9), obs_thesis_champ_c, "old"), in_study_area!=1)
+if(r_execution_level<2){leaf %>%
+    addCircles(data = st_transform(st_geometry(single_points_thesis), 4326), col = "blue") %>%
+    addPolygons(data=st_transform(st_buffer(obs_gtj_champ, 9), 4326), col = "orange")
+  #st_write(single_points_thesis, paste(owndatapath, "/", "single_points_thesis.shp", sep="")) #This line is desactivated because [SPOILER ALERT: this file will not be used thereafter]
+}
+
+
+#The observation raw data is available to check if the points are spatially correct and check their attribute table.
+
+
+#Correcting wrong data: 
+##1: 2018/02/26 ONCFS: The 8 observations are in the right place, but appear to be about Hazel grouse ("prospection génétiqe26-FEV-18.shp" file in oncfs2018trackspath).
+obs_thesis_c=obs_thesis_c %>% filter(!NumObs %in% c(47:54))
+
+##2: 2018/04/06 Mauron: The 2 observations  are indeed about Capercaillie, but misplaced compared to the raw data ("prospection génétique _06-AVR-18.shp" in oncfs2018trackspath). However, on the tracks, there are some indications for an observation with a group of circular short segments.
+temp=obs_thesis_c[obs_thesis_c$NumObs=="38", ]
+temp$Date="2018/04/06"
+temp$Year=format(as.Date(temp$Date, format='%Y/%m/%d'), '%Y')
+temp$Month=format(as.Date(temp$Date, format='%Y/%m/%d'), '%m')
+temp$Day=format(as.Date(temp$Date, format='%Y/%m/%d'), '%d')
+obs_thesis_c[obs_thesis_c$NumObs=="38", ]<-temp
+
+temp=obs_thesis_c[obs_thesis_c$Date=="2018/04/06" & obs_thesis_c$OBSER1=="ONCFS", ]
+temp$OBSER1="Mauron Nicolas"
+obs_thesis_c[obs_thesis_c$Date=="2018/04/06" & obs_thesis_c$OBSER1=="ONCFS", ]<-temp
+
+##3: 2018/04/11 Mottet: The point overlap with a known track, but is not to the right date (The true one is 2018/04/06).
+temp=obs_thesis_c[obs_thesis_c$NumObs=="94", ]
+temp$Date="2018/04/06"
+temp$Year=format(as.Date(temp$Date, format='%Y/%m/%d'), '%Y')
+temp$Month=format(as.Date(temp$Date, format='%Y/%m/%d'), '%m')
+temp$Day=format(as.Date(temp$Date, format='%Y/%m/%d'), '%d')
+obs_thesis_c[obs_thesis_c$NumObs=="94", ]<-temp
+
+##4: 2018/04/11 Depraz JL: The point overlap with a known track, but do not belong to any observation dataset available in gtjonf2018tracks.
+
+#Plotting and Writing the final complete dataset
+if(r_execution_level<2){
+  leaf %>% addCircles(data = st_transform(st_geometry(obs_thesis_c), 4326), col = "black")
+  st_write(obs_thesis_c, paste(owndatapath, "/", "obs_thesis_c.shp", sep=""))
+  saveRDS(obs_thesis_c, paste(owndatapath, "/", "obs_thesis_c.rds", sep=""))
+}
+
+
+#Cleaning useless variables
+rm(list=c("obs_thesis_champ_c", "obs_gtj", "obs_gtj_champ", "single_points_thesis", "temp"))
+```
+
+
+###GTJ observation dataset
+```{r}
+#Importation of the dataset
+obs_gtj<-st_read(file.path(gtjdatapath, "/gtj_datasets/Grand tetras.shp"), options="ENCODING=latin1")
+st_crs(obs_gtj)<-2154
+if(r_execution_level<2){leaf %>% addCircles(data = st_transform(st_geometry(obs_gtj), 4326), col = "black")}
+
+##Removing the accents in the field names
+colnames(obs_gtj)<-c("NumObs", "X", "Y", "Date", "Annee", "Saison", "Protocole", "Sexe", "TypeObs1", "TypeObs2", "NbrObs", "Reproducti", 
+                         "FouMou", "Departemen", "Commune", "PropForest", "Parcelle", "Precision", "NomUN", "StatutUN", "Observat1", 
+                         "Observat2","Observat3", "TransmisPa", "NTube", "Commentair", "geometry")
+
+##Removing the accents in the entire dataset
+for(j in c("Saison", "Protocole", "Sexe", "TypeObs1", "TypeObs2",  "Reproducti", "Commune", "PropForest", "Parcelle", "Precision", 
+           "NomUN", "StatutUN", "Observat1", "Observat2","Observat3", "TransmisPa", "NTube", "Commentair")){ #All the fields that contains data with accents
+  temp<-as.factor(data.frame(obs_gtj[, j])[, -2])
+  for(i in levels(temp)){levels(temp)[levels(temp)==i]<-crappyAccentsRemover(i)}
+  obs_gtj[, j]<-temp
+}
+
+##Correcting Dates not in the right format
+obs_gtj$Date=format(as.Date(obs_gtj$Date, format='%Y%m%d'), '%Y/%m/%d')
+
+##Correcting the ? in "Commentair" field
+temp3=list()
+for(i in 1:nrow(obs_gtj)){ #nrow(obs_gtj)
+  temp=unlist(strsplit(as.character(obs_gtj$Commentair[i]), "[?]"))
+  temp2=NULL
+  for(j in (1:length(temp))){temp2=paste(temp2, temp[j], sep="")}
+  temp3=c(temp3, temp2)
+}
+obs_gtj$Commentair<-as.character(temp3)
+
+
+#Cleaning useless variables
+rm(list=c("temp", "temp2", "temp3"))
+```
+
+####Correcting wrong data on Champfromier
+```{r}
+#Dataset creation
+obs_gtj_champ<-datasetCreator(contour_champ_wc, obs_gtj)
+if(r_execution_level<2){leaf %>% addCircles(data = st_transform(st_geometry(obs_gtj_champ), 4326), col = "black")}
+
+##Creation of a temporary obs_thesis_champ_c
+obs_thesis_champ_c<-datasetCreator(contour_champ_wc, obs_thesis_c)
+
+
+#Identifying points that differ between subsets
+#The buffers should be set to "9" to correspond with my manual search of single points.
+single_points_gtj=subset(datasetCreator(st_buffer(obs_thesis_champ_c, 9), obs_gtj_champ, "old"), in_study_area!=1)
+if(r_execution_level<2){leaf %>%
+    addCircles(data = st_transform(st_geometry(single_points_gtj), 4326), col = "blue") %>%
+    addPolygons(data=st_transform(st_buffer(obs_thesis_champ_c, 9), 4326), col = "orange")
+  #st_write(single_points_gtj, paste(owndatapath, "/", "single_points_gtj.shp", sep="")) #This line is desactivated because [SPOILER ALERT: this file will not be used thereafter]
+}
+
+
+#Correcting wrong data:
+##The data from 2010 to 2017 does not belong to any track of tracks_dataset, so we cannot verify them.
+##1: 2018/04/11 Béréziat: This point is correct.
+##2: 2018/04/11 Mottet: This point is spatially correct, but belongs to the 2018/04/06 track : the date is wrong.
+temp=obs_gtj[obs_gtj$NumObs=="7701", ]
+temp$Date="2018/04/06"
+temp$Annee=format(as.Date(temp$Date, format='%Y/%m/%d'), '%Y')
+obs_gtj[obs_gtj$NumObs=="7701", ]<-temp
+
+##3: 2018/04/11 Galetti: These 2 points do not belong to any track of tracks_dataset, so we cannot verify them.
+##4: 2018/04/17 Richerot: The 5 points do not belong to any track of tracks_dataset, so we cannot verify them.
+##5: Most of the data of 2018 comes after the end of the thesis: their absence from the thesis files is normal. These points are not related to winter propsections.
+
+
+#Creation of the "ObserNOM" field to rebuild "ID"
+ObserNOM=rep(NA, length=nrow(obs_gtj))
+for(i in (1:nrow(obs_gtj))){
+  temp=unlist(strsplit(as.character(obs_gtj$Observat1[i]), " "))[1]
+  if(!is.na(temp)){if(temp!="non"){ObserNOM[i]<-temp}}
+}
+obs_gtj$Obser1NOM=ObserNOM
+obs_gtj$ID=paste(obs_gtj$Date, ObserNOM)
+
+
+#Plotting and riting the final complete dataset
+if(r_execution_level<2){
+  leaf %>% addCircles(data = st_transform(st_geometry(obs_gtj), 4326), col = "black")
+  st_write(obs_gtj, paste(owndatapath, "/", "obs_gtj.shp", sep=""))
+  saveRDS(obs_gtj, paste(owndatapath, "/", "obs_gtj.rds", sep=""))
+}
+
+
+#Cleaning useless variables
+rm(list=c("obs_gtj_champ", "obs_thesis_champ_c", "single_points_gtj", "ObserNOM", "temp"))
+```
+
+###About obs_fusion
+####An important problem: NumObs is broken
+```{r}
+#NumObs, which could have been the field used for a dplyr::join, is broken.
+
+#Temporary datasets creation
+obs_gtj_champ<-datasetCreator(contour_champ_wc, obs_gtj)
+obs_thesis_champ_c<-datasetCreator(contour_champ_wc, obs_thesis_c)
+
+#Plotting and exposing the problem
+if(r_execution_level<2){leaf %>%
+  addCircles(data = st_transform(st_geometry(obs_gtj_champ), 4326), col = "blue") %>%
+  addLabelOnlyMarkers(data = st_transform(st_geometry(obs_gtj_champ), 4326), label = obs_gtj_champ$NumObs, 
+                      labelOptions = labelOptions(style=list(color="blue"), direction = "top", noHide = TRUE, textOnly = TRUE)) %>%
+  addCircles(data = st_transform(st_geometry(obs_thesis_champ_c), 4326), col = "red") %>%
+  addLabelOnlyMarkers(data = st_transform(st_geometry(obs_thesis_champ_c), 4326), label = obs_thesis_champ_c$NumObs, 
+                      labelOptions = labelOptions(style=list(color="red"), direction = "bottom", noHide = TRUE, textOnly = TRUE))}
+
+#Cleaning useless variables
+rm(list=c("obs_gtj_champ", "obs_thesis_champ_c"))
+```
+
+####Retrieving NumObs
+```{r}
+#Initialisation of numObs_table
+numObs_table=data.frame(matrix(ncol=2))
+colnames(numObs_table)<-list("NumObsGTJ", "NumObs_thesis")
+
+#Setting up the variables for the function to come
+levels_thesis=levels(as.factor(obs_thesis_c$ID))
+buffer_increment=seq(from=1, to=9, by=1) #The maximum value has been set to correspond to my manual research with QGIS.
+
+for(i in 1:length(levels_thesis)){ #We decided to take obs_gtj as the base dataset for the observations.
+  #print(paste("levels_thesis[i] :", levels_thesis[i]))
+  
+  #Subsets the observations datasets with levels from obs_thesis
+  subset_gtj=subset(obs_gtj, obs_gtj$ID==levels_thesis[i])
+  subset_thesis=subset(obs_thesis_c, obs_thesis_c$ID==levels_thesis[i])
+  
+  if(nrow(subset_gtj)!=0){ #If there are indeed points in obs_gtj which corresponds to the levels of obs_thesis
+    for(j in 1:nrow(subset_gtj)){ #For each point in subset_gtj
+      #print(paste("j =", j))
+      point_newNumObs=NULL #Initialises the point_newNumObs variable, which is set to get the obs_thesis$numObs corresponding to the obs_gtj point buffer
+      
+      for(k in 1:length(buffer_increment)){ #Increases gradually the radius of the buffer to get the closest point(s) with st_intersects()
+        #print(paste("buffer_increment :", k))
+        
+        if(is.null(point_newNumObs)){ #If point_newNumObs hasn't been found yet, useful to prevent too much calculation
+          intersection_result=st_intersects(st_buffer(subset_gtj[j, ], buffer_increment[k]), subset_thesis)[[1]] #Intersection of the increasing buffer of the point of obs_gtj with subset_thesis points ([[1]] is here to simplify the code: as we arecomparing and buffering only one point of subset_gtj at the time, intersection_result can only have one element (which is intersection_result[[1]]))
+          #print(paste("intersection_result =", intersection_result))
+          
+          if(length(intersection_result)==0){next} #If st_intersets hasn't found any obs_thesis point corresponding to the obs_gtj point buffer
+          if(length(intersection_result)==1){point_newNumObs=intersection_result} #If st_intersets has found one obs_thesis point corresponding to the obs_gtj point buffer
+          else { #If st_intersets has found many obs_thesis points corresponding to the obs_gtj point buffer
+            duplicate_indexes=NULL #Initialises this variable, which is used to get the l index of the row of the correct obs_thesis point corresponding to the obs_gjt one
+            
+            for(l in intersection_result){ #Then, among those correspondances, which are found when the points are on the exact same location, compare 3 fields : "Sexe", "Commentair"/"CMT" & "TypeObs1"
+              #print(paste("subset_gtj$Sexe[j] :", subset_gtj$Sexe[j]))
+              #print(paste("subset_thesis$Sexe[l] :", subset_thesis$Sexe[l]))
+              if(!is.na(subset_gtj$Sexe[j]) & !is.na(subset_thesis$Sexe[l])){
+                if(subset_gtj$Sexe[l]==subset_thesis$Sexe[j]){duplicate_indexes=c(duplicate_indexes, l)}}
+              
+              #print(paste("subset_gtj$Commentair[j] :", subset_gtj$Commentair[j]))
+              #print(paste("subset_thesis$CMT[l] :", subset_thesis$CMT[l]))
+              if(!is.na(subset_gtj$Commentair[j]) & !is.na(subset_thesis$CMT[l])){
+                if(subset_gtj$Commentair[j]==subset_thesis$CMT[l]){duplicate_indexes=c(duplicate_indexes, l)}}
+              
+              #print(paste("subset_gtj$TypeObs1[j] :", subset_gtj$TypeObs1[j]))
+              #print(paste("subset_thesis$TypeObs1[l] :", subset_thesis$TypeObs1[l]))
+              if(!is.na(subset_gtj$TypeObs1[l]) & !is.na(subset_thesis$TypeObs1[j])){
+                if(subset_gtj$TypeObs1[l]==subset_thesis$TypeObs1[j]){duplicate_indexes=c(duplicate_indexes, l)}}
+            }
+            #print(paste("duplicate_indexes =", duplicate_indexes))
+            
+            point_newNumObs=names(sort(table(duplicate_indexes), decreasing=TRUE))[1] #Only keeps the index of the obs_thesis point that is the most selected by the 3 criteria
+            #print(paste("point_newNumObs =", point_newNumObs))
+      }}}
+      rownames(subset_thesis)<-c(1:nrow(subset_thesis)) #Resets rownames of subset_thesis, to ensure that the following subset_thesis[point_newNumObs, "NumObs"] is working
+      if(!is.null(point_newNumObs)){numObs_table=rbind(numObs_table, c(data.frame(subset_gtj[j, "NumObs"])[, -2], data.frame(subset_thesis[point_newNumObs, "NumObs"])[, -2]))} #Collects in the numObs_table the NumObsGTJ and the NumObs-thesis found
+}}}
+numObs_table<-numObs_table[-1, ] #Removes the first line of numObs_table filled with NAs
+
+#Cleaning useless variables
+rm(list=c("levels_thesis", "buffer_increment", "subset_gtj", "subset_thesis", "point_newNumObs", "intersection_result", "duplicate_indexes"))
+```
+
+####numObs_table audit
+```{r}
+#Initialisation of numObs_verification_table
+numObs_verification_table=data.frame(matrix(ncol=5))
+colnames(numObs_verification_table)<-c("NumObsGTJ", "NumObs_thesis", "Criteria", "ValueGTJ", "Value_thesis")
+
+for(i in 1:nrow(numObs_table)){ #For each correspondance found in numObs_table
+  for (j in c("Sexe", "Commentair", "TypeObs1")){ #And for each of these fields (adjust the number of fields to be more or less strict in the detection of incorrect correspondances)
+    gtj_value=as.character(data.frame(obs_gtj[obs_gtj$NumObs==numObs_table[i, "NumObsGTJ"], j])[, 1]) #Get the value of the j field for the i point in obs_gtj
+    
+    if (j=="Commentair"){j<-"CMT"} #Dirty solution to overcome the different names for the same fields in the observations datasets
+    thesis_value=as.character(data.frame(obs_thesis_c[obs_thesis_c$NumObs==numObs_table[i, "NumObs_thesis"], j])[, 1])  #Get the value of the j field for the i point in obs_thesis
+  
+  if(gtj_value!=thesis_value & !is.na(gtj_value) & !is.na(thesis_value)){
+    numObs_verification_table=rbind(numObs_verification_table, 
+                                    c(numObs_table[i, "NumObsGTJ"], numObs_table[i, "NumObs_thesis"], j, gtj_value, thesis_value))
+}}}
+numObs_verification_table<-numObs_verification_table[-1, ] #Removes the first line of numObs_verification_table filled with NAs
+
+#Cleaning useless variables
+rm(list=c("gtj_value", "thesis_value"))
+```
+
+####numObs_table correction
+```{r}
+#This chunk aims to delete all the points in numObs_table which have >=2 problems (detected in the previous chunk).
+
+numObs_original_table=numObs_table #Backups numObs_table
+
+#Initialisation of numObs_verification_table
+##This table collects all the problems of the points deleted in numObs_table (in other words, numObs_deletion_table gets all the lines of numObs_verification_table that are about the points that have >=2 problems)
+numObs_deletion_table=data.frame(matrix(ncol=5))
+colnames(numObs_deletion_table)<-c("NumObsGTJ", "NumObs_thesis", "Criteria", "ValueGTJ", "Value_thesis")
+
+levels=levels(as.factor(numObs_verification_table$NumObsGTJ))
+for (i in 1:length(levels)){ #length(levels)
+  subset=subset(numObs_verification_table, numObs_verification_table$NumObsGTJ==levels[i])
+  
+  if(nrow(subset)>=2){
+    numObs_deletion_table=rbind(numObs_deletion_table, subset)
+    numObs_table=numObs_table[-(numObs_table$NumObsGTJ==levels[i]), ]
+}}
+
+numObs_deletion_table<-numObs_deletion_table[-1, ] #Removes the first line of numObs_deletion_table filled with NAs
+
+#Cleaning useless variables
+rm(list=c("levels", "subset"))
+```
+
+####Creation of obs_fusion
+```{r}
+#Preparing the numObs_table for the first join (with obs_gtj)
+colnames(numObs_table)<-list("NumObs", "NumObs_thesis")
+numObs_table<-as.data.frame(numObs_table)
+
+#First join: association of the 2 NumObs numbers in obs_gtj
+obs_gtj=left_join(obs_gtj, numObs_table, by = "NumObs")
+
+
+#Preparing obs_gtj for the second join (with obs_thesis_c)
+names(obs_gtj)[names(obs_gtj) == 'NumObs'] <- 'NumObsGTJ'
+names(obs_gtj)[names(obs_gtj) == 'NumObs_thesis'] <- 'NumObs'
+
+##Second join: fusion of the 2 obs datasets
+obs_fusion=st_as_sf(full_join(data.frame(obs_gtj), data.frame(obs_thesis_c), by = "NumObs"))
+names(obs_fusion)[names(obs_fusion) == 'NumObs'] <- 'NumObsThesis'
+
+##Putting back the correct field name for NumObs in obs_gtj
+names(obs_gtj)[names(obs_gtj) == 'NumObs'] <- 'NumObsThesis'
+names(obs_gtj)[names(obs_gtj) == 'NumObsGTJ'] <- 'NumObs'
+
+#Correcting obs_fusion
+##Setting unique identifiers
+obs_fusion$new_id=seq(1, nrow(obs_fusion), 1)
+
+##Compilation of the data
+columnsMerger=function(main_column, secondary_column){
+  if("sf" %in% class(main_column) | "sf" %in% class(secondary_column)){
+    main_column=data.frame(main_column)[, -2]
+    secondary_column=data.frame(secondary_column)[, -2]}
+  
+  main_column=as.character(main_column)
+  secondary_column=as.character(secondary_column)
+  
+  for (i in 1:length(main_column)){if(is.na(main_column[i])){main_column[i]<-secondary_column[i]}}
+  return(as.factor(main_column))
+}
+
+columns_to_merge=matrix(c("ID.x", "Sexe.x", "Date.x", "TypeObs1.x", "TypeObs2.x", "Saison.x", "NbrObs", "Reproducti", "Commentair", "Precision", "Departemen", "Observat1", "Observat2", "Observat3", "Annee", "Protocole", "X", "Y", "Obser1NOM.x",
+                          "ID.y", "Sexe.y", "Date.y", "TypeObs1.y", "TypObs2", "Saison.y", "NbVu", "REPRO", "CMT", "Precisn", "DPT", "OBSER1", "OBSER2", "OBSER3", "Year", "PRTCL", "coords_x1", "coords_x2", "Obser1NOM.y"), ncol=2)
+colnames(columns_to_merge)=list("ColumnBDDGTJ", "ColumnBDDThesis")
+
+for(i in 1:nrow(columns_to_merge)){
+  obs_fusion[, columns_to_merge[i, 1]]<-columnsMerger(obs_fusion[, columns_to_merge[i, 1]], obs_fusion[, columns_to_merge[i, 2]])}
+
+##Removing useless columns
+obs_fusion=obs_fusion[, c("new_id", "NumObsGTJ", "NumObsThesis",
+                           "ID.x", "PROSPID",
+                           "Date.x", "Annee", "Month", "Day", "Saison.x", 
+                           "Sexe.x", 
+                           "Observat1", "Obser1NOM.x", "Observat2", "Observat3", "Nb_Obser", "TransmisPa", "Protocole", "NTube", 
+                           "TypeObs1.x", "TypeObs2.x", "NbrObs", "Reproducti", "FouMou", 
+                           "Departemen", "Commune", "PropForest", "Parcelle", "Precision", "NomUN", "StatutUN", "UNCode", 
+                           "Commentair",
+                           "TC", "LD", "PF", "PARCELL", "OBSER4",  "PROSPSA", "distance", "TypObs1", "TypObs3", 
+                           "X", "Y", "geometry.x", "geometry.y")]
+
+##Correcting the column names
+colnames(obs_fusion)=c("new_id", "NumObsGTJ", "NumObsThesis",
+                       "ID", "PROSPID",
+                       "Date", "Annee", "Month", "Day", "Saison", 
+                       "Sexe", 
+                       "Observat1", "Obser1NOM.x", "Observat2", "Observat3", "Nb_Obser", "TransmisPa", "Protocole", "NTube", 
+                       "TypeObs1", "TypeObs2", "NbrObs", "Reproducti", "FouMou", 
+                       "Departemen", "Commune", "PropForest", "Parcelle", "Precision", "NomUN", "StatutUN", "UNCode", 
+                       "Commentair",
+                       "TC", "LD", "PF", "PARCELL", "OBSER4",  "PROSPSA", "distance", "TypObs1", "TypObs3", 
+                       "X", "Y", "geometry.x", "geometry.y")
+
+
+#Shows what's wrong
+temp=obs_fusion[is.na(obs_fusion$NumObsGTJ), ]
+if(r_execution_level<2){leaf %>% addCircles(data = st_transform(st_geometry(temp), 4326), col = "black")} #Plot
+#All the points that come from the thesis dataset are ignored by leaf: that is because the geometry.x (that contains the obs_gtj points geometry) is considered as the geometry column, and geometry.y (that contains the obs_thesis points geometry) as an ordinary field: the 2 columns have to be merged to have a correct dataset, but it isn't a simple procedure (the both geometry fields need to be deconstructed and then rebuilt).
+
+geometry_fusion=NULL #Initialisation of the reconstructed geometry field
+
+##Reconstructing the geometry of points coming from obs_gtj
+subset_gtj=obs_fusion[!is.na(obs_fusion$NumObsGTJ), c("NumObsGTJ", "NumObsThesis", "new_id", "geometry.x", "geometry.y")]
+geometry_gtj=unlist(subset_gtj$geometry.x) #Collects all the geometries of geometry.x in the form of a list of coordinates like : list(x_first_point, y_first_point, x_second_point, y_second_point, and so on)
+for(i in 1:nrow(subset_gtj)){
+  geometry_fusion=rbind(geometry_fusion, st_geometry(st_point(geometry_gtj[1:2]))) #Adds to geometry_fusion the point defined by the 2 first elements/coordinates of geometry_gtj
+  geometry_gtj=geometry_gtj[-(1:2)]} #Removes of geometry_gtj the coordinates of the point added to geometry_fusion in the previous line
+
+##Reconstructing the geometry of points coming from obs_thesis
+##This is the same system than the previous lines, but for the thesis points
+subset_thesis=obs_fusion[is.na(obs_fusion$NumObsGTJ), c("NumObsGTJ", "NumObsThesis", "new_id", "geometry.x", "geometry.y")]
+geometry_thesis=unlist(subset_thesis$geometry.y)
+for(i in 1:nrow(subset_thesis)){
+  geometry_fusion=rbind(geometry_fusion, st_geometry(st_point(geometry_thesis[1:2])))
+  geometry_thesis=geometry_thesis[-(1:2)]}
+
+geometry_fusion=st_sfc(geometry_fusion) #Transforms geometry_fusion, which is a list of points, into a correct geometry field
+
+##Reconstruction of obs_fusion with the corrected geometry
+obs_fusion_temp=cbind(data.frame(obs_fusion)[-c(45, 46)], geometry_fusion) #Gets obs_fusion without the 2 geometry columns and cbinds it with geometry_fusion
+obs_fusion_temp=st_as_sf(data.frame(obs_fusion_temp)) #Transforms obs_fusion_temp into a truly valid sf dataframe
+st_crs(obs_fusion_temp)<-2154
+if(r_execution_level<2){leaf %>% addCircles(data = st_transform(st_geometry(obs_fusion_temp), 4326), col = "black")} #Plot
+
+##Verification step to check if the points coming from obs_thesis are now valid and displayed by leaflet
+temp=obs_fusion_temp[is.na(obs_fusion_temp$NumObsGTJ), ]
+if(r_execution_level<2){leaf %>% addCircles(data = st_transform(st_geometry(temp), 4326), col = "black")}
+
+##As all the points are now correct, we can replace obs_fusion by obs_fusion_temp
+obs_fusion<-obs_fusion_temp
+
+
+#SUMMARY: (to be completed)
+# - "NumObsGTJ": 
+# - "X":
+# - "Y":
+# - "Date.x":
+# - "Annee":
+# - "Saison.x":
+# - "Protocole":
+# - "Sexe.x":
+# - "TypeObs1.x":
+# - "TypeObs2.x":
+# - "NbrObs":
+# - "Reproducti":
+# - "FouMou":
+# - "Departemen":
+# - "Commune":
+# - "PropForest":
+# - "Parcelle":
+# - "Precision":
+# - "NomUN":
+# - "StatutUN":
+# - "Observat1":
+# - "Observat2":
+# - "Observat3":
+# - "TransmisPa":
+# - "NTube":
+# - "Commentair":
+# - "ID.x":
+# - "NumObsThesis":
+# - "ID.y":
+# - "Sexe.y":
+# - "Date.y":
+# - "TypeObs1.y":
+# - "TypeObs2.y":
+# - "TypeObs3":
+# - "Saison.y":
+# - "NbVu":
+# - "REPRO":
+# - "CMT":
+# - "Precisn":
+# - "TC":
+# - "LD":
+# - "PF":
+# - "PARCELL":
+# - "DPT":
+# - "UNCode":
+# - "OBSER1":
+# - "OBSER2":
+# - "OBSER3":
+# - "OBSER4":
+# - "Year":
+# - "Month":
+# - "Day":
+# - "Obser1NOM":
+# - "PROSPID":
+# - "PRTCL":
+# - "PROSPSA":
+# - "distance":
+# - "Nb_Obser":
+# - "TypObs1":
+# - "TypObs2":
+# - "TypObs3":
+# - "coords_x1":
+# - "coords_x2":
+# - "Obs1NOM":
+# - "Obs1Nom_1":
+# - "geometry.x":
+# - "geometry.y":
+# - "new_id":
+
+
+#Plotting and writing the final complete dataset
+if(r_execution_level<2){
+  leaf %>% addCircles(data = st_transform(st_geometry(obs_fusion), 4326), col = "black")
+  st_write(obs_fusion, paste(owndatapath, "/", "obs_fusion.shp", sep=""))
+  saveRDS(obs_fusion, paste(owndatapath, "/", "obs_fusion.rds", sep=""))
+}
+
+#Cleaning useless variables
+rm(list=c("columns_to_merge", "geometry_fusion", "subset_gtj", "geometry_gtj", "subset_thesis", "geometry_thesis", "obs_fusion_temp", "temp"))
+```
+
+
+###Points and tracks association ON CHAMPFROMIER
+```{r}
+#obs_fusion_champ<-datasetCreator(contour_champ_wc, obs_fusion)
+
+#Creation of tracks_dataset, the study area resticted dataset (See CAP_script for more details)
+##Extraction of useful fields
+tracks_dataset<-datasetCreator(contour_champ_wc, iL18new)[, c("new_id", "PROSPID", #Unique identifiers
+                                                              "Date_prosp", "Year", "Month", "Day", "SAISON", #Temporal data
+                                                              "Observateu", "ObserNOM", "DUPL", #Observer fields (DUPL will be useful later)
+                                                              "Length", "file_origin", "geometry")] #Useful tracks features
+
+##Setting correct column names
+colnames(tracks_dataset) <- list("new_id", "prospid", 
+                                 "date", "year",	"month",	"day",	"season", 
+                                 "observer", "observer_name", "correspondance_field", 
+                                 "length", "file_origin", "geometry")
+
+##Setting up tracks_dataset
+rownames(tracks_dataset)<-c(1:nrow(tracks_dataset))
+tracks_dataset$prospid<-tracks_dataset$new_id
+
+#Points and tracks association loop
+levels_tracks=levels(droplevels(tracks_dataset$date)) #This loop is only based on the date to work
+distance_threshold=100 #To be fixed
+
+#During the 17/06/2020 Skype, we decided to work only with obs_gtj, as obs_fusion creation is taking much time.
+obs_gtj_champ<-datasetCreator(contour_champ_wc, obs_gtj)
+
+##Preparing dataset
+prospid=vector(length=nrow(obs_gtj_champ))
+distance_to_track=vector(length=nrow(obs_gtj_champ))
+obs_gtj_champ=cbind(obs_gtj_champ, prospid, distance_to_track)
+
+
+for(i in 1:length(levels_tracks)){
+  subset_tracks=subset(tracks_dataset, tracks_dataset$date==levels_tracks[i])
+  subset_points=subset(obs_gtj_champ, obs_gtj_champ$Date==levels_tracks[i])
+  
+  if(nrow(subset_points)!=0){ #If there is at least one observation point for the track(s) of the day in levels_tracks[i]
+    
+    #Cartography step, just to see what we are doing
+    pal=rep(brewer.pal(n=8, name="Set2"), ceiling(nrow(subset_tracks)/8))[1:nrow(subset_tracks)] #Setting the list of colors
+    if(r_execution_level<2){print(leaf %>%
+            addProviderTiles(providers$CartoDB.Positron) %>% #Gray background map to highlight the tracks (in color)
+            addPolylines(data=st_transform(subset_tracks, 4326), col=pal) %>% #Adds the tracks of the day
+            addLabelOnlyMarkers(data=st_transform(st_centroid(subset_tracks), 4326), label=paste("prospid :", subset_tracks$prospid), labelOptions=labelOptions(style=list(color=pal), noHide=TRUE, textOnly=TRUE)) %>% #Adds the prospid label for each track
+            addCircles(data = st_transform(st_geometry(subset_points), 4326), col = "black") %>% #Adds the observation points of the day
+            addLabelOnlyMarkers(data=st_transform(subset_points, 4326), label=paste("NumObs :", subset_points$NumObs), labelOptions=labelOptions(style=list(color="black"), noHide=TRUE, textOnly=TRUE)))} #Adds the numObs label for each point
+    
+    #Distance matrix initialisation
+    distance_matrix=data.frame(matrix(NA, nrow=nrow(subset_points), ncol=nrow(subset_tracks)))
+    rownames(distance_matrix)<-paste("NumObs_", subset_points$NumObs, sep="") #In rows, the NumObs of each point
+    colnames(distance_matrix)<-paste("prospid_", subset_tracks$prospid, sep="") #In columns, the prospid of each track
+    
+    for(j in 1:nrow(subset_tracks)){ #=ncol(distance_matrix)
+      for(k in 1:nrow(subset_points)){ #=nrow(distance_matrix)
+        distance_matrix[k, j]<-st_distance(subset_points[k, ], subset_tracks[j, ]) #Calculates the distance of each point to each track ans stores it in the corresponding cell in distance_matrix
+        
+        if(distance_matrix[k, j]<distance_threshold){ #Selection of the points that are closer than the distance_threshold
+          numObs_point=as.character(data.frame(subset_points[k, "NumObs"])[, -2]) #Get the numObs of the point that 
+          
+          #Now, there are two possible situations here:
+          if(nrow(subset_tracks)==1){ #If there is only one track in subset_tracks, ...
+            prospid_track=as.character(data.frame(subset_tracks[j, "prospid"])[, -2])} #The function will go straight forward and associate all the points that are closer than the distance_threshold to the corresponding track
+          else { #If there are many tracks in subset_tracks, ...
+            if(j>=2){ #The function will have to choose the track the closest to each point, and associate this track to the corresponding point, BUT ONLY if we already have at least 2 distances calculated in the distance_matrix, because searching for the minimum value in a list that contains only one value is absud.
+              prospid_track=as.character(data.frame(subset_tracks[match(min(distance_matrix[k, 1:j]), distance_matrix[k, 1:j]), "prospid"])[, -2])}
+            else {prospid_track=as.character(data.frame(subset_tracks[j, "prospid"])[, -2])}}
+            
+          #Association step: we do not only associate each point to the corresponding track, but the distance between the both is saved too
+          obs_gtj_champ[obs_gtj_champ$NumObs==numObs_point, "prospid"]<-prospid_track
+          obs_gtj_champ[obs_gtj_champ$NumObs==numObs_point, "distance_to_track"]<-distance_matrix[k, j]
+}}}}}
+
+##Removing all the "FALSE" when the propsid and the distance_to_track fields aren't filled
+for (i in 1:nrow(obs_gtj_champ)){if(obs_gtj_champ$prospid[i]==FALSE){obs_gtj_champ$prospid[i]=obs_gtj_champ$distance_to_track[i]=""}}
+
+
+#Plotting and writing the dataset with the association of the points to the tracks
+if(r_execution_level<2){
+  leaf %>% addCircles(data = st_transform(st_geometry(obs_gtj_champ), 4326), col = "black")
+  st_write(obs_gtj_champ, paste(owndatapath, "/", "obs_gtj_champ.shp", sep=""))
+  saveRDS(obs_gtj_champ, paste(owndatapath, "/", "obs_gtj_champ.rds", sep=""))
+}
+
+#Cleaning useless variables
+rm(list=c("levels_tracks", "distance_threshold", "prospid", "distance_to_track", 
+          "subset_tracks", "subset_points", "pal", "distance_matrix", "numObs_point", "prospid_track"))
+```
+
+
+
+
+
+
+
+
+
+

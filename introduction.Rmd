@@ -1,5 +1,6 @@
+#Initialisation
 ---
-title: "introduction"
+title: "CAP_script"
 output: rmarkdown::html_vignette
 vignette: >
   %\VignetteIndexEntry{introduction}
@@ -24,138 +25,135 @@ library(maxnet)
 library(RStoolbox)
 ```
 
+## Path setup
 ```{r}
-system(paste("ln -s /Volumes/ExtremeSSD/GTJ/DATA", system.file("extdata", package = "GTJ")))
-datapath <- file.path(system.file("extdata", package = "GTJ"), "DATA")
-# list.files(file.path(datapath, "Env_var/sites"))
+lidarpath <- file.path("D:/Documents/gtj_local/data/lidar_data/full/DATA/")
+speciespath <- file.path(lidarpath, "Species/CAP/")
+rawdatapath <- file.path("D:/Documents/gtj_local/data/raw_data/")
+scriptpath <- file.path("D:/Documents/gtj_local/R/irstea_git/vignettes/")
+outputpath <- file.path(scriptpath, "output/")
 ```
-# Hazel grouse data - observation distance
+
+##Variables setup
+```{r}
+study_period=c(2005:2018)
+```
+
+# Capercaillie data - observation distance
 ```{r}
 #Distance data and logspline GDT
-species_path <- file.path(datapath, "Species/HZ")
-OBSGDTshp <- st_read(file.path(species_path, "OBSGELtot2016.shp"))
-
-species_path <- file.path(datapath, "Species/CAP")
-OBSGDTshp <- st_read(file.path(species_path, "OBSGDTtot2018.shp"))
-# table(OBSGDTshp$distance)
-#dd <- as.numeric(as.character(OBSGDTshp$distance))
-# hist(dd)
-#table(as.character(dd))
-#class(OBSGDTshp$distance)
-
-OBSGDTshp$distance <- as.numeric(as.character(OBSGDTshp$distance)) # as.numeric(OBSGDTshp$distance)# st_read(file.path(species_path, "OBSGDTtot2018.shp"))
-
+OBSGDTshp <- st_read(file.path(speciespath, "OBSGDTtot2018.shp"))
+OBSGDTshp$distance=as.numeric(as.character(OBSGDTshp$distance))
 
 Tracks_distance <- subset(OBSGDTshp, !OBSGDTshp$PROSPID=="NA" & OBSGDTshp$PROSPSA=="Hivernales" & OBSGDTshp$distance < 100)
 
 fitlogspline1 <- logspline(Tracks_distance$distance, lbound = 0, ubound = 100)
 distances <- seq(0, 100, len = 501)
-hist(Tracks_distance$distance, freq = FALSE, 20)
+hist(as.numeric(Tracks_distance$distance), freq = FALSE, 20)
 lines(distances, dlogspline(distances, fitlogspline1), col = "red")
 ```
 
-# Study area for hazel grouse
+# Study area (Champfromier)
 ```{r}
-limits_HZ <- st_read(file.path(datapath, "Env_var/sites/Retord_large.geojson"))
+limits_CAP <- st_read(file.path(lidarpath, "Env_var/sites/Champfromier.geojson"))
 ```
 
 
+
+#JURA tracks
 ```{r}
-TracksJURA <- st_read(file.path(species_path, 'IndividualLines2017_JURA.shp'))
-TracksJURA <- subset(TracksJURA, SAISON=="Hivernales" &  Year %in% c(2007:2016))
-TracksID_JURA <- TracksJURA$OBJECTID
+TracksJURA <- st_read(file.path(speciespath, 'IndividualLines2018_JURA.shp'))
+TracksJURA <- subset(TracksJURA, SAISON=="Hivernales" &  Year %in% study_period)
+TracksID_JURA <- TracksJURA$PROSPID
 ```
 
-
+#JURA obs
 ```{r}
-OBSGDTshp_JURA <- subset(OBSGDTshp, PROSPID %in% TracksID_JURA & Saison=="hiver" & PROSPSA=="Hivernales" & distance < 100 & Year %in% c(2007:2016))
+OBSGDTshp_JURA <- subset(OBSGDTshp, PROSPID %in% TracksID_JURA & Saison=="hiver" & PROSPSA=="Hivernales" & distance < 100 & Year %in% study_period)
 plot(st_geometry(OBSGDTshp_JURA))
-plot(st_geometry(limits_HZ), add = TRUE, border = "red")
-# plot(st_geometry(OBSGDTshp), col = "red", add = TRUE)
-
+plot(st_geometry(OBSGDTshp), col = "red", add = TRUE)
+plot(st_geometry(limits_CAP), add = TRUE, border = "black")
 ```
 
 
-
+#AIN tracks
 ```{r}
-TracksAIN <- st_read(file.path(species_path, 'IndividualLines2017_AIN.shp'))
-TracksAIN <- subset(TracksAIN, SAISON=="Hivernales" &  Year %in% c(2007:2016))
-TracksID_AIN <- TracksAIN$OBJECTID
+TracksAIN <- st_read(file.path(speciespath, 'IndividualLines2018_AIN_GESTION.shp'))
+TracksAIN <- subset(TracksAIN, SAISON=="Hivernales" &  Year %in% study_period)
+TracksID_AIN <- TracksAIN$PROSPID
 ```
 
+#AIN obs
 ```{r}
-OBSGDTshp_AIN <- subset(OBSGDTshp, PROSPID %in% TracksID_AIN & Saison=="hiver" & PROSPSA=="Hivernales" & distance < 100 & Year %in% c(2007:2016))
+OBSGDTshp_AIN <- subset(OBSGDTshp, PROSPID %in% TracksID_AIN & Saison=="hiver" & PROSPSA=="Hivernales" & distance < 100 & Year %in% study_period)
+plot(st_geometry(OBSGDTshp_AIN))
+plot(st_geometry(OBSGDTshp), col = "red", add = TRUE)
+plot(st_geometry(limits_CAP), add = TRUE, border = "black")
 ```
 
+#Importing LiDAR outlines
 ```{r}
-Lidar_AIN_contour <- st_read(file.path(species_path, "LIDAR_AIN_contour_buffer.shp"))
-Lidar_JURA_contour <- st_read(file.path(species_path, "LIDAR_JURA_contour_buffer.shp"))
+Lidar_AIN_contour <- st_read(file.path(speciespath, "Aire_gestion_CAP_AIN_buffer.shp"))
+Lidar_JURA_contour <- st_read(file.path(speciespath, "Aire_gestion_CAP_JURA_buffer.shp"))
 ```
 
-
+#Plot differences between JURA and AIN regions
 ```{r}
 # plot(st_geometry(OBSGDTshp))
 par(mfrow = c(1, 2))
 plot(st_geometry(OBSGDTshp_JURA), col = "blue", axes = TRUE, main = "JURA")
 plot(st_geometry(Lidar_JURA_contour), add = TRUE, border = "green")
-plot(st_geometry(limits_HZ), add = TRUE, border = "red")
+plot(st_geometry(limits_CAP), add = TRUE, border = "red")
 
 plot(st_geometry(OBSGDTshp_AIN), col = "green", axes = TRUE, main = "AIN")
 plot(st_geometry(Lidar_AIN_contour), add = TRUE, border = "blue")
-plot(st_geometry(limits_HZ), add = TRUE, border = "red")
+plot(st_geometry(limits_CAP), add = TRUE, border = "red")
 
 ```
 
 
+
+#Setting up the predictions
 ```{r}
-# predictors <- c("Canopy2030sd",  "penetrationratio0205",  "penetrationratio0501sd", "penetrationratio0205sd",  "Tree_densityinf10", "Tree_density10",  "Tree_gini",  "middle_gap",  "Bat" , "Road", "grassland")
-# 
-# /Volumes/ExtremeSSD/GTJ/DATA/Env_var/MW15_8ha/Mean/AINraster_MV_15_8ha_Meancor_G.s20_200.tif
-# 
-
-```
-
-
-```{r}
-target_path_15_8ha_Mean <- file.path(datapath, "Env_var/MW15_8ha/Mean/")
-target_path_15_8ha_sd <- file.path(datapath, "Env_var/MW15_8ha/sd/")
+target_path_15_8ha_Mean <- file.path(lidarpath, "Env_var/MW1_8ha/Mean", "/")
+target_path_15_8ha_sd <- file.path(lidarpath, "Env_var/MW1_8ha/sd/", "/")
 new_env_raster <- raster::stack(
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_H.nb2_5relative_density.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_H.nb10_20relative_density.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_H.nb20_30relative_density.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_H.nb0.5_1ratio.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_H.nb2_5ratio.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_H.nb5_10ratio.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_H.simpson.tif"),
-  paste0(target_path_15_8ha_Mean, "Distance_MV_15_8ha_MeanskiAIN.tif"),
-  paste0(target_path_15_8ha_Mean, "Distance_MV_15_8ha_MeanRoadAIN_IGN.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_H.nb0.5_1relative_density.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_H.nb2_5relative_density.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_H.nb10_20relative_density.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_H.nb20_30relative_density.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_H.nb0.5_1ratio.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_H.nb2_5ratio.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_H.nb5_10ratio.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_H.simpson.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_Treeinf10.density.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_Tree10.density.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_Tree20.density.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_Tree.giniH.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_G.s1000_Inf.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_G.s200_1000.tif"),
-  paste0(target_path_15_8ha_Mean,"AINraster_MV_15_8ha_Meancor_G.s20_200.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_Treeinf10.density.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_Tree10.density.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_Tree20.density.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_Tree.giniH.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_G.s1000_Inf.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_G.s200_1000.tif"),
-  paste0(target_path_15_8ha_sd,"AINraster_MV_15_8ha_sdcor_G.s20_200.tif"),
-  paste0(target_path_15_8ha_Mean, "AINraster_MV_15_8ha_Meancor_Tree.sumS.tif"),
-  paste0(target_path_15_8ha_sd, "AINraster_MV_15_8ha_sdcor_Tree.sumS.tif"),
-  paste0(target_path_15_8ha_Mean, "raster_MV_15_8ha_Mean_propConifG2.tif"),
-  paste0(target_path_15_8ha_sd, "raster_MV_15_8ha_sd_propConifG2.tif"),
-  paste0(target_path_15_8ha_Mean, "bati_surfaceratio_15_8ha_tot2.tif"), quick=TRUE
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_H.nb2_5relative_density.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_H.nb10_20relative_density.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_H.nb20_30relative_density.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_H.nb0.5_1ratio.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_H.nb2_5ratio.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_H.nb5_10ratio.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_H.simpson.tif"),
+  paste0(target_path_15_8ha_Mean, "Distance_MV_1_8ha_MeanskiAIN.tif"),
+  paste0(target_path_15_8ha_Mean, "Distance_MV_1_8ha_MeanRoadAIN_IGN.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_H.nb0.5_1relative_density.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_H.nb2_5relative_density.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_H.nb10_20relative_density.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_H.nb20_30relative_density.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_H.nb0.5_1ratio.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_H.nb2_5ratio.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_H.nb5_10ratio.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_H.simpson.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_Treeinf10.density.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_Tree10.density.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_Tree20.density.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_Tree.giniH.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_G.s1000_Inf.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_G.s200_1000.tif"),
+  paste0(target_path_15_8ha_Mean,"AINraster_MV_1_8ha_Meancor_G.s20_200.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_Treeinf10.density.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_Tree10.density.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_Tree20.density.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_Tree.giniH.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_G.s1000_Inf.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_G.s200_1000.tif"),
+  paste0(target_path_15_8ha_sd,"AINraster_MV_1_8ha_sdcor_G.s20_200.tif"),
+  paste0(target_path_15_8ha_Mean, "AINraster_MV_1_8ha_Meancor_Tree.sumS.tif"),
+  paste0(target_path_15_8ha_sd, "AINraster_MV_1_8ha_sdcor_Tree.sumS.tif"),
+  paste0(target_path_15_8ha_Mean, "raster_MV_1_8ha_Mean_propConifG2.tif"),
+  paste0(target_path_15_8ha_sd, "raster_MV_1_8ha_sd_propConifG2.tif"),
+  paste0(target_path_15_8ha_Mean, "bati_surfaceratio_1_8ha_tot2.tif"), quick=TRUE
 )
 
 names(new_env_raster) <- c( "Canopy0205",  "Canopy1020", "Canopy2030","penetrationratio0501", "penetrationratio0205","penetrationratio0510","Simpson", "Ski", "Road",  "Canopy0501sd", "Canopy0205sd", "Canopy1020sd", "Canopy2030sd", "penetrationratio0501sd", "penetrationratio0205sd","penetrationratio0510sd","Simpsonsd", "Tree_densityinf10", "Tree_density10", "Tree_density20", "Tree_gini", "grassland", "middle_gap", "small_gap",  "Tree_densityinf10sd", "Tree_density10sd", "Tree_density20sd", "Tree_ginisd", "grasslandsd", "middle_gapsd", "small_gapsd", "Tree_sumS", "Tree_sumSsd", "Prop_resG", "Prop_resGsd", "Bat")
@@ -164,96 +162,73 @@ predictors <- c("Canopy2030sd",  "penetrationratio0205",  "penetrationratio0501s
 new_env_raster <- subset(new_env_raster, predictors)
 ```
 
+#Clipping the rasters with the limits of the study area
 ```{r}
-# plot(new_env_raster)
+new_env_raster_champfromier <- crop(new_env_raster, extent(limits_CAP))
+new_env_raster_champfromier <- mask(new_env_raster_champfromier, limits_CAP)
 ```
 
-```{r}
-plot(raster(new_env_raster, "Tree_density10"))
+#Plotting all the predictors
+```{r, fig.width=20, fig.height=20}
+plot(new_env_raster_champfromier)
+```
+
+#Plotting one predictor, combined with tracks
+```{r, fig.width=10, fig.height=10}
+predictor_to_test = "Tree_density10"
+plot(raster(new_env_raster_champfromier, predictor_to_test), main = predictor_to_test)
+plot(st_geometry(limits_CAP), add = TRUE, border = "black", lwd=2)
 plot(st_geometry(TracksAIN), add = TRUE)
-plot(st_geometry(OBSGDTshp_AIN), add = TRUE, col = "red")
-```
-
-```{r}
-# TODO: Select the correct subset of HZ data for Ain
-# Get background sampling done
-# Run model
-# Make prediction
-# Check distances...
+#NE FONCTIONNE PAS :
+plot(st_geometry(OBSGDTshp_AIN), add = TRUE, col = "red", lwd=20) 
+plot(st_geometry(OBSGDTshp_JURA), add = TRUE, col = "red", lwd=20)
 ```
 
 
-TOCHECK
+ 
+#Model data 
 ```{r}
-new_env_raster <- normImage(new_env_raster) # TODO: do we need this?
-ContourAIN <- Lidar_AIN_contour
-names(new_env_raster) <- c("Canopy2030sd",  "penetrationratio0205",  "penetrationratio0501sd", "penetrationratio0205sd",  "Tree_densityinf10", "Tree_density10",  "Tree_gini",  "middle_gap",   "Prop_resG", "Prop_resGsd", "Bat" , "Road" , "grassland")
-new_env_raster <- raster::mask(new_env_raster, ContourAIN)
-new_env_raster_AIN_15_8 <- new_env_raster
-```
-
-TODO: the following code is not necessary - we have already all the elements
-```{r}
-Tracks <- st_read(file.path(species_path, 'IndividualLines2017_AIN.shp')) #shapefile(paste0(target_path,'IndividualLines2017_AIN.shp'))
-Tracks <- subset(Tracks, SAISON=="Hivernales" & Year %in% c(2007:2016))
-TracksID <- Tracks$OBJECTID
-#Distance data and logspline GDT
-OBSGDTshp <- st_read(file.path(species_path, "OBSGELtot2016.shp"))
-# shapefile(paste0(target_path, "OBSGELtot2016.shp"))
-Tracks_distance <- subset(OBSGDTshp, PROSPID!="NA" & PROSPSA=="Hivernales" & distance < 100)
-fitlogspline1 <- logspline(Tracks_distance$distance, lbound = 0, ubound = 100 )
-OBSGDTshp <- subset(OBSGDTshp, PROSPID %in% TracksID & Saison=="hiver" & PROSPSA=="Hivernales" & distance < 100 & Year %in% c(2007:2016))
-```
-
-# Model data 
-
-```{r}
-#create a new data.frame and assign 1 to real obs
+#Presence dataframe creation
 pres_pointsGDT <- data.frame(st_coordinates(OBSGDTshp), Pres = 1)
 
-#### Generate random points winter random point
-set.seed(154)
-TracksSP <- as(Tracks, Class = "Spatial")
+#Absence dataframe creation
+TracksSP <- as(TracksAIN, Class = "Spatial")
 backgroundGDT <- RANDOM_POINTS(TracksSP, n=10000, logplineobj = fitlogspline1, type="random")
-
 backgroundGDT <- data.frame(X=backgroundGDT$x0, Y=backgroundGDT$y0, Pres=0)
 
-#Merge data.frames
+#Merge dataframes
 pres_bgGDT <- rbind(pres_pointsGDT, backgroundGDT) 
 
-#create a spatial point dataframe
+#Spatial point dataframe
 coordinates(pres_bgGDT) <- ~X + Y
-
 proj4string(pres_bgGDT) <- st_crs(OBSGDTshp)$proj4string
 
-#
-pres_bgGDT@data <- cbind(pres_bgGDT@data, extract(new_env_raster, pres_bgGDT))
+#Extraction of raster values corresponding to points in the dataframe
+pres_bgGDT@data <- cbind(pres_bgGDT@data, extract(new_env_raster_champfromier, pres_bgGDT))
 
+#Dataframe setup
 pres_bgGDT <- as(pres_bgGDT, "data.frame")
-
-#Omit NA for background data and Obs data (outside the raster area)
 pres_bgGDT <- na.omit(pres_bgGDT)
 
 Pres_data <- as.vector(pres_bgGDT$Pres)
 ```
 
-# Model fitting
+#Model fitting
 ```{r}
 predictor_maxnet <- pres_bgGDT[, c("Canopy2030sd",  "penetrationratio0205",  "penetrationratio0501sd", "penetrationratio0205sd",  "Tree_densityinf10", "Tree_density10",  "Tree_gini",  "middle_gap",   "Prop_resG", "Prop_resGsd", "Bat" , "Road", "grassland" )]
 #Add a product term between Canopy2030 and grassland
+
 FORMULA <- maxnet.formula(Pres_data, predictor_maxnet, classes = "lq")
-# as.character(FORMULA)
 FORMULA <- paste0(FORMULA, "+ Canopy2030sd:grassland")
 FORMULA <- as.formula(FORMULA)
+
 model_maxnet <- maxnet(Pres_data, predictor_maxnet, f = FORMULA, regmult = 1)
 ```
 
-# Map predictions
+#Map predictions
 ```{r}
-output_path_15_8ha <- species_path
-
 #use it to predict results
-predictor <- rasterToPoints(new_env_raster)
+predictor <- rasterToPoints(new_env_raster_champfromier)
 predictor <- na.omit(predictor)
 predictor <- as.data.frame(predictor)
 
@@ -264,15 +239,15 @@ maps_predicted <- raster::rasterFromXYZ(predictor[, c("x","y","predicted")], res
 crs(maps_predicted) <- "+proj=lcc +lat_1=49 +lat_2=44 +lat_0=46.5 +lon_0=3 +x_0=700000 +y_0=6600000 +ellps=GRS80 +units=m +no_defs"
 plot(maps_predicted)
 
-writeRaster(maps_predicted, paste0(output_path_15_8ha, "/AIN_model_14_exponential.tif"), overwrite = TRUE, NAflag =  -9999, options=c("COMPRESS=LZW"))
+writeRaster(maps_predicted, paste0(speciespath, "/AIN_model_14_exponential.tif"), overwrite = TRUE, NAflag =  -9999, options=c("COMPRESS=LZW"))
 
 #cloglog
 
 predictor$predicted<-predict(model_maxnet, predictor,type=c("cloglog"), clamp=FALSE)[,1]
 
 maps_predicted<-rasterFromXYZ(predictor[, c("x","y","predicted")], res=c(25,25))
+
 #Save maps
 crs(maps_predicted) <- "+proj=lcc +lat_1=49 +lat_2=44 +lat_0=46.5 +lon_0=3 +x_0=700000 +y_0=6600000 +ellps=GRS80 +units=m +no_defs"
 writeRaster(maps_predicted, paste0(output_path_15_8ha, "AIN_model_14_cloglog.tif"), overwrite = TRUE, NAflag =  -9999, options=c("COMPRESS=LZW"))
-
 ```
